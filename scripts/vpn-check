@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Is my traffic actually tunnelled? Answers that properly, not just "did my IPv4 change".
+#
+# Usage:  ./vpn-check
+#
+# A VPN can look perfectly fine on IPv4 while leaking your real address over IPv6 or DNS, so a
+# single "what's my IP" check is not enough to trust it.
+set -uo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+
+pass=0; fail=0
+ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$*"; pass=$((pass+1)); }
+bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$*"; fail=$((fail+1)); }
+info() { printf '        %s\n' "$*"; }
+
+# The endpoint is the one address that must NOT go through the tunnel, so it also tells us what the
+# exit node's address is supposed to be.
+EXPECT=""
+if [ -f "$CONF_FILE" ]; then
+  EXPECT="$(awk -F'[ :]+' '/^Endpoint/ {print $3}' "$CONF_FILE")"
+fi
+
+step "Tunnel interface"
+IFACE="$(ifconfig 2>/dev/null | awk -F: '/^utun/ {print $1}' | while read -r i; do
+  ifconfig "$i" 2>/dev/null | grep -q "inet 10\.8\.0\." && echo "$i"; done | head -1)"
+if [ -n "$IFACE" ]; then ok "up on $IFACE"; else bad "no WireGuard interface found — tunnel is DOWN"; fi
+
+step "IPv4 egress"
+V4="$(curl -4 -fsS --max-time 15 https://api.ipify.org 2>/dev/null || true)"
+if [ -z "$V4" ]; then
+  bad "no IPv4 egress at all (no internet?)"
+elif [ -n "$EXPECT" ] && [ "$V4" = "$EXPECT" ]; then
+  ok "$V4 — matches the exit node"
+elif [ -n "$EXPECT" ]; then
+  bad "$V4 — expected $EXPECT, so IPv4 is NOT tunnelled"
+else
+  info "$V4 (no config to compare against)"
+fi
+
+step "IPv6 egress  (the leak that hides behind a working IPv4)"
+# A global v6 address on the host plus a successful v6 request means the real address escaped,
+# regardless of how healthy IPv4 looks.
+if ifconfig 2>/dev/null | grep -qE "inet6 2[0-9a-f]{3}:"; then
+  V6="$(curl -6 -fsS --max-time 8 https://api64.ipify.org 2>/dev/null || true)"
+  if [ -n "$V6" ]; then
+    bad "LEAKING — $V6 reached the internet outside the tunnel"
+    info "the client config needs an IPv6 address on [Interface], or macOS silently"
+    info "refuses the ::/1 routes and every v6-capable site sees your real address"
+  else
+    ok "no IPv6 escaped (fails closed)"
+  fi
+else
+  ok "host has no global IPv6 address — nothing to leak"
+fi
+
+step "DNS"
+SEEN="$(dig +short +time=5 whoami.akamai.net @ns1-1.akamaitech.net 2>/dev/null | tail -1)"
+if [ -z "$SEEN" ]; then
+  info "could not determine the resolver's exit address"
+elif [ -n "$EXPECT" ] && [ "$SEEN" = "$EXPECT" ]; then
+  ok "queries exit at $SEEN — same as the tunnel, no leak"
+else
+  bad "queries exit at ${SEEN:-unknown} — not the tunnel, DNS is leaking"
+fi
+info "resolvers: $(scutil --dns 2>/dev/null | awk '/nameserver\[/ {print $3}' | sort -u | tr '\n' ' ')"
+
+step "First hop"
+# -m 2 rather than 1: with a single hop some traceroute builds print only the header before giving
+# up, and grepping for the gateway directly is steadier than counting output lines.
+HOP="$(traceroute -n -m 2 -w 2 -q 1 1.1.1.1 2>/dev/null | awk '/^ *1 /{print $2; exit}')"
+case "$HOP" in
+  10.8.0.1) ok "10.8.0.1 — traffic enters the tunnel" ;;
+  ""|"*")   info "first hop did not reply (some gateways drop probes); the egress checks above are the authority" ;;
+  *)        bad "$HOP — first hop is not the tunnel" ;;
+esac
+
+step "Where the internet thinks you are"
+curl -fsS --max-time 15 https://ipinfo.io/json 2>/dev/null \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);print('        ',d.get('ip'),'|',d.get('city'),d.get('region'),d.get('country'),'|',d.get('org'))" 2>/dev/null \
+  || info "lookup failed"
+
+printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] || exit 1

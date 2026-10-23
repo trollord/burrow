@@ -1,0 +1,49 @@
+[package]
+name = "burrow"
+version = "0.1.0"
+description = "Your own WireGuard VPN, on your own cloud account"
+authors = ["Bytelights"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "burrow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The AWS SDK rather than shelling out to the `aws` CLI: this is meant for people who have never
+# opened a terminal, and "first install the AWS CLI" would defeat the entire point.
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-lightsail = "1"
+aws-sdk-sts = "1"
+aws-credential-types = "1"
+tokio = { version = "1", features = ["full"] }
+
+# Credentials go in the OS keychain (Keychain on macOS, Credential Manager on Windows, Secret
+# Service on Linux) and never touch a config file on disk.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+base64 = "0.22"
+rand = "0.8"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

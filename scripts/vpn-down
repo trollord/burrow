@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Destroy the exit node and stop all billing for it.
+# Usage:  ./vpn-down          (defaults to us-east-1)
+#         VPN_REGION=us-west-2 ./vpn-down
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+
+preflight
+
+# Deliberately NOT `set -e`-fatal per step: if the instance delete fails we must still try to release
+# the static IP, because an unattached static IP keeps billing. Partial cleanup is worse than none.
+failed=0
+
+if command -v wg >/dev/null && sudo -n wg show interfaces 2>/dev/null | grep -q .; then
+  say "note: a WireGuard interface is still up locally."
+  say "      run: sudo wg-quick down $CONF_FILE"
+fi
+
+step "Deleting instance ($INSTANCE)"
+if [ "$(instance_state)" = "absent" ]; then
+  say "not present, nothing to delete"
+else
+  if aws_ls delete-instance --instance-name "$INSTANCE" >/dev/null 2>&1; then
+    say "deleted"
+  else
+    say "FAILED to delete — check the console"; failed=1
+  fi
+fi
+
+step "Releasing static IP ($STATIC_IP)"
+# The one people forget. A Lightsail static IP is free only while attached to a running instance;
+# once the instance is gone an orphaned IP bills every month, silently, forever.
+if ! static_ip_exists; then
+  say "not allocated, nothing to release"
+else
+  aws_ls detach-static-ip --static-ip-name "$STATIC_IP" >/dev/null 2>&1 || true
+  if aws_ls release-static-ip --static-ip-name "$STATIC_IP" >/dev/null 2>&1; then
+    say "released"
+  else
+    say "FAILED to release — THIS WILL KEEP BILLING. Release it in the console."; failed=1
+  fi
+fi
+
+step "Verifying nothing billable remains in $REGION"
+left_i="$(aws_ls get-instances --query "instances[?name=='${INSTANCE}'].name" --output text 2>/dev/null || true)"
+left_s="$(aws_ls get-static-ips --query "staticIps[?name=='${STATIC_IP}'].name" --output text 2>/dev/null || true)"
+[ -z "${left_i//[[:space:]]/}" ] && say "instances:  none" || { say "instances:  $left_i STILL PRESENT"; failed=1; }
+[ -z "${left_s//[[:space:]]/}" ] && say "static IPs: none" || { say "static IPs: $left_s STILL PRESENT"; failed=1; }
+
+if [ -f "$CONF_FILE" ]; then
+  step "Client config"
+  say "the config at $CONF_FILE is now dead (its endpoint no longer exists)."
+  say "remove it with: rm $CONF_FILE"
+fi
+
+if [ "$failed" -ne 0 ]; then
+  die "cleanup did not fully succeed — see above. Billing may still be running."
+fi
+printf '\nAll clear. Nothing is billing in %s.\n\n' "$REGION"

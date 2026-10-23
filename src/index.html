@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Burrow</title>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <h1>Burrow</h1>
+      </div>
+      <p class="tagline">Your own VPN, on your own cloud account. No subscription.</p>
+    </header>
+
+    <main id="app">
+      <!-- ───────────────────────── Onboarding ───────────────────────── -->
+      <section id="onboarding" hidden>
+        <ol class="steps">
+          <li class="step">
+            <h2><span class="n">1</span> Create a free AWS account</h2>
+            <p>
+              Skip this if you already have one. AWS asks for a card, but Burrow only ever creates
+              one small server that you can destroy whenever you like.
+            </p>
+            <button class="link" data-open="https://portal.aws.amazon.com/billing/signup">
+              Open the AWS sign-up page
+            </button>
+          </li>
+
+          <li class="step">
+            <h2><span class="n">2</span> Make a user just for Burrow</h2>
+            <p>
+              Don't use your main login. This creates a restricted user that can <em>only</em> touch
+              Lightsail, so a leaked key can't reach the rest of your account.
+            </p>
+            <button class="link" data-open="https://console.aws.amazon.com/iam/home#/users/create">
+              Open the "create user" page
+            </button>
+            <ul class="detail">
+              <li>User name: <code>burrow</code></li>
+              <li>Click <b>Next</b></li>
+              <li>Choose <b>Attach policies directly</b></li>
+              <li>Search for <code>AmazonLightsailFullAccess</code> and tick it</li>
+              <li>Click <b>Next</b>, then <b>Create user</b></li>
+            </ul>
+          </li>
+
+          <li class="step">
+            <h2><span class="n">3</span> Create an access key</h2>
+            <p>This is the part Burrow needs. It is not your password.</p>
+            <ul class="detail">
+              <li>Click the <code>burrow</code> user you just made</li>
+              <li>Open the <b>Security credentials</b> tab</li>
+              <li>Scroll to <b>Access keys</b> → <b>Create access key</b></li>
+              <li>Choose <b>Command Line Interface (CLI)</b>, tick the confirmation, <b>Next</b></li>
+              <li><b>Create access key</b></li>
+            </ul>
+            <p class="warn">
+              The secret is shown <b>once</b>. If you close that page without copying it, delete the
+              key and make another — it cannot be recovered.
+            </p>
+          </li>
+
+          <li class="step">
+            <h2><span class="n">4</span> Paste them here</h2>
+            <form id="creds-form" autocomplete="off">
+              <label>
+                Access key ID
+                <input id="akid" type="text" placeholder="AKIA…" spellcheck="false" required />
+              </label>
+              <label>
+                Secret access key
+                <input id="secret" type="password" placeholder="40 characters" spellcheck="false" required />
+              </label>
+              <div class="row">
+                <button type="submit" id="save-creds" class="primary">Check and save</button>
+                <span id="creds-msg" class="msg" role="status"></span>
+              </div>
+            </form>
+            <p class="detail">
+              Stored in your system keychain, never in a file. Burrow talks straight to AWS — there
+              is no Burrow server, and your keys never leave this machine.
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <!-- ───────────────────────── Main ───────────────────────── -->
+      <section id="main-panel" hidden>
+        <div class="card account">
+          <div>
+            <span class="label">AWS account</span>
+            <span id="acct" class="value">—</span>
+          </div>
+          <button id="forget" class="ghost">Sign out</button>
+        </div>
+
+        <div class="card">
+          <label class="block">
+            Location
+            <select id="region"></select>
+          </label>
+
+          <div id="node-state" class="state">
+            <span class="dot" id="dot"></span>
+            <span id="state-text">Checking…</span>
+          </div>
+
+          <div class="row">
+            <button id="create" class="primary">Create server</button>
+            <button id="destroy" class="danger" hidden>Destroy server</button>
+          </div>
+          <p class="detail">
+            About <b>$5 a month</b>, billed by the hour, with 1 TB of traffic included. Destroying
+            the server stops all charges — nothing is left behind.
+          </p>
+        </div>
+
+        <div class="card" id="connect-card" hidden>
+          <span class="label">Connect</span>
+          <p class="detail">
+            Burrow can't raise the tunnel for you yet — that needs an administrator helper, which is
+            the next thing being built. For now, run this in Terminal:
+          </p>
+          <pre id="connect-cmd" class="cmd"></pre>
+          <button id="copy-connect" class="ghost">Copy</button>
+          <p class="detail">To disconnect:</p>
+          <pre id="disconnect-cmd" class="cmd"></pre>
+          <button id="copy-disconnect" class="ghost">Copy</button>
+          <p id="wg-warn" class="warn" hidden>
+            WireGuard isn't installed. Run <code>brew install wireguard-tools</code> first.
+          </p>
+        </div>
+
+        <p id="log" class="log" role="status"></p>
+      </section>
+    </main>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# Provision a US WireGuard exit node on AWS Lightsail and write a client config.
+# Usage:  ./vpn-up            (defaults to us-east-1)
+#         VPN_REGION=us-west-2 ./vpn-up
+#
+# Tear it down with ./vpn-down. Nothing here is free: the instance bills by the hour from the moment
+# it is created, so a failed run still needs vpn-down.
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+
+preflight
+
+# An existing instance means a previous run is still up. Creating a second one silently would double
+# the bill and leave the first orphaned, so stop instead.
+state="$(instance_state)"
+if [ "$state" != "absent" ]; then
+  die "$INSTANCE already exists (state: $state).
+  Connect with:  wg-quick up $CONF_FILE
+  Or remove it:  ./vpn-down"
+fi
+
+step "Generating keys locally"
+# Both keypairs are generated here, on this machine. The server's private key is handed to the
+# instance through its launch script, so no SSH key, no SSH port and no login to the box is ever
+# needed. The trade-off is that the server key transits the Lightsail API and is readable in
+# user-data on the instance; acceptable for a single-user node you destroy on demand, and the first
+# thing to change if this ever becomes multi-tenant.
+umask 077
+mkdir -p "$CONF_DIR"
+SERVER_PRIV="$(wg genkey)"
+SERVER_PUB="$(printf '%s' "$SERVER_PRIV" | wg pubkey)"
+CLIENT_PRIV="$(wg genkey)"
+CLIENT_PUB="$(printf '%s' "$CLIENT_PRIV" | wg pubkey)"
+say "server public key: $SERVER_PUB"
+say "client public key: $CLIENT_PUB"
+
+step "Allocating static IP ($STATIC_IP)"
+# Allocated before the instance so that a quota or permission failure costs nothing, and so the
+# endpoint is known the moment the instance is up.
+if static_ip_exists; then
+  say "already allocated, reusing"
+else
+  aws_ls allocate-static-ip --static-ip-name "$STATIC_IP" >/dev/null
+  say "allocated"
+fi
+ENDPOINT_IP="$(aws_ls get-static-ip --static-ip-name "$STATIC_IP" \
+  --query 'staticIp.ipAddress' --output text)"
+say "endpoint: $ENDPOINT_IP"
+
+step "Building launch script"
+USERDATA="$(mktemp)"
+trap 'rm -f "$USERDATA"' EXIT
+# Quoted heredoc: nothing below is expanded locally. __SERVER_PRIV__ and __CLIENT_PUB__ are
+# substituted afterwards, and $WAN deliberately resolves on the instance, not here.
+cat >"$USERDATA" <<'LAUNCH'
+# Lightsail PREPENDS its own "#!/bin/sh" bootstrap (SSH CA setup) to whatever you pass as user-data
+# and runs the concatenation under dash. A "#!/bin/bash" line here would be an inert comment in the
+# middle of that script, and the first bashism — `set -o pipefail` — aborts the whole thing with
+# "Illegal option -o pipefail" before anything is installed. So: stay POSIX out here, write the real
+# script to disk, and hand it to bash explicitly.
+set -eu
+cat >/root/vpn-setup.sh <<'SETUP'
+#!/bin/bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# cloud-init races unattended-upgrades for the apt lock on first boot. Retry instead of dying,
+# otherwise provisioning is a coin flip.
+for _ in $(seq 1 30); do
+  if apt-get update -y && apt-get install -y wireguard; then break; fi
+  sleep 10
+done
+command -v wg >/dev/null || { echo "FATAL: wireguard did not install"; exit 1; }
+
+echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-wireguard.conf
+sysctl --system
+
+# The outbound interface name is not stable across Lightsail images, so read it rather than assume
+# eth0 — getting this wrong means the tunnel comes up but no traffic is ever NATed out.
+WAN="$(ip -4 route show default | awk '{print $5; exit}')"
+
+umask 077
+cat >/etc/wireguard/wg0.conf <<EOF
+[Interface]
+Address = __SERVER_WG_ADDR__, __SERVER_WG_ADDR6__
+ListenPort = __PORT__
+PrivateKey = __SERVER_PRIV__
+PostUp   = iptables -t nat -A POSTROUTING -o ${WAN} -j MASQUERADE; iptables -A FORWARD -i wg0 -j ACCEPT; iptables -A FORWARD -o wg0 -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o ${WAN} -j MASQUERADE; iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -j ACCEPT
+
+[Peer]
+PublicKey = __CLIENT_PUB__
+AllowedIPs = __CLIENT_WG_ADDR__, __CLIENT_WG_ADDR6__
+EOF
+
+systemctl enable --now wg-quick@wg0
+systemctl is-active --quiet wg-quick@wg0 || { echo "FATAL: wg-quick@wg0 did not start"; exit 1; }
+touch /var/log/vpn-byoc-ready
+SETUP
+chmod +x /root/vpn-setup.sh
+# Logged to a known path so a failed boot can be diagnosed without guessing.
+exec /bin/bash /root/vpn-setup.sh >>/var/log/vpn-byoc-setup.log 2>&1
+LAUNCH
+
+# Keys can contain / and + from base64, so use a delimiter that base64 never produces.
+sed -i '' \
+  -e "s|__SERVER_PRIV__|${SERVER_PRIV}|" \
+  -e "s|__CLIENT_PUB__|${CLIENT_PUB}|" \
+  -e "s|__SERVER_WG_ADDR__|${SERVER_WG_ADDR}|" \
+  -e "s|__SERVER_WG_ADDR6__|${SERVER_WG_ADDR6}|" \
+  -e "s|__CLIENT_WG_ADDR__|${CLIENT_WG_ADDR}|" \
+  -e "s|__CLIENT_WG_ADDR6__|${CLIENT_WG_ADDR6}|" \
+  -e "s|__PORT__|${PORT}|" \
+  "$USERDATA" 2>/dev/null || sed -i \
+  -e "s|__SERVER_PRIV__|${SERVER_PRIV}|" \
+  -e "s|__CLIENT_PUB__|${CLIENT_PUB}|" \
+  -e "s|__SERVER_WG_ADDR__|${SERVER_WG_ADDR}|" \
+  -e "s|__SERVER_WG_ADDR6__|${SERVER_WG_ADDR6}|" \
+  -e "s|__CLIENT_WG_ADDR__|${CLIENT_WG_ADDR}|" \
+  -e "s|__CLIENT_WG_ADDR6__|${CLIENT_WG_ADDR6}|" \
+  -e "s|__PORT__|${PORT}|" \
+  "$USERDATA"
+say "ok"
+
+step "Creating instance ($INSTANCE, $BUNDLE, $BLUEPRINT)"
+aws_ls create-instances \
+  --instance-names "$INSTANCE" \
+  --availability-zone "$ZONE" \
+  --blueprint-id "$BLUEPRINT" \
+  --bundle-id "$BUNDLE" \
+  --user-data "$(cat "$USERDATA")" >/dev/null
+say "requested, waiting for it to run"
+
+for _ in $(seq 1 60); do
+  s="$(instance_state)"
+  [ "$s" = "running" ] && break
+  sleep 5
+done
+[ "$(instance_state)" = "running" ] || die "instance did not reach 'running'. Run ./vpn-down to clean up."
+say "running"
+
+step "Attaching static IP"
+aws_ls attach-static-ip --static-ip-name "$STATIC_IP" --instance-name "$INSTANCE" >/dev/null
+say "attached $ENDPOINT_IP"
+
+step "Waiting for the server to finish installing WireGuard"
+# Worth the extra machinery: the server can boot, report "running", and still have failed to install
+# anything. Without this check vpn-up reports success and you only discover the truth later as a
+# tunnel that never handshakes. SSH is opened to THIS machine only, used to poll for the ready
+# marker, and closed again below.
+MYIP="$(curl -fsS --max-time 15 https://api.ipify.org 2>/dev/null || true)"
+READY=0
+if [ -z "$MYIP" ]; then
+  say "could not determine this machine's public IP; skipping the readiness check"
+else
+  aws_ls put-instance-public-ports --instance-name "$INSTANCE" \
+    --port-infos "fromPort=${PORT},toPort=${PORT},protocol=UDP,cidrs=0.0.0.0/0" \
+                 "fromPort=22,toPort=22,protocol=TCP,cidrs=${MYIP}/32" >/dev/null
+  KEY="$(mktemp)"; trap 'rm -f "$USERDATA" "$KEY"' EXIT
+  aws_ls download-default-key-pair --query 'privateKeyBase64' --output text >"$KEY"
+  chmod 600 "$KEY"
+  SSH_OPTS="-i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  SSH_OPTS="$SSH_OPTS -o ConnectTimeout=10 -o LogLevel=ERROR -o BatchMode=yes"
+  for _ in $(seq 1 40); do
+    # shellcheck disable=SC2086
+    if ssh $SSH_OPTS "ubuntu@${ENDPOINT_IP}" 'test -f /var/log/vpn-byoc-ready' 2>/dev/null; then
+      READY=1; break
+    fi
+    sleep 10
+  done
+  if [ "$READY" -eq 1 ]; then
+    say "WireGuard is up and listening"
+  else
+    say "server did NOT report ready. Setup log:"
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "ubuntu@${ENDPOINT_IP}" 'sudo tail -30 /var/log/vpn-byoc-setup.log 2>/dev/null \
+      || sudo tail -20 /var/log/cloud-init-output.log 2>/dev/null' 2>/dev/null | sed 's/^/      /' || true
+  fi
+fi
+
+step "Locking the firewall down"
+# REPLACES the port set, closing the SSH hole opened above. Lightsail opens 22 and 80 by default and
+# we want neither. WireGuard never replies to unauthenticated packets, so an open UDP port is not
+# the exposure an open SSH port is.
+aws_ls put-instance-public-ports --instance-name "$INSTANCE" \
+  --port-infos "fromPort=${PORT},toPort=${PORT},protocol=UDP,cidrs=0.0.0.0/0" >/dev/null
+say "only UDP ${PORT} open; SSH closed"
+
+step "Writing client config"
+cat >"$CONF_FILE" <<EOF
+# vpn-byoc — ${REGION}
+# Up:   wg-quick up ${CONF_FILE}
+# Down: wg-quick down ${CONF_FILE}
+[Interface]
+PrivateKey = ${CLIENT_PRIV}
+Address = ${CLIENT_WG_ADDR}, ${CLIENT_WG_ADDR6}
+DNS = ${CLIENT_DNS}
+
+[Peer]
+PublicKey = ${SERVER_PUB}
+Endpoint = ${ENDPOINT_IP}:${PORT}
+# ::/0 is included deliberately. The server has no IPv6, so routing v6 into the tunnel blackholes
+# it instead of letting it escape over your ISP and leak your real address. It fails closed.
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+chmod 600 "$CONF_FILE"
+say "$CONF_FILE"
+
+if [ "$READY" -eq 1 ]; then
+  printf '\nReady and verified.\n'
+else
+  printf '\nProvisioned, but the server never confirmed it was ready (see the log above).\n'
+  printf 'The tunnel will probably not hand shake. Run ./vpn-down and try again.\n'
+fi
+
+cat <<EOF
+
+  Connect:     sudo wg-quick up $CONF_FILE
+  Check IP:    curl https://api.ipify.org
+  Disconnect:  sudo wg-quick down $CONF_FILE
+  Destroy:     ./vpn-down        <-- billing continues until you do this
+
+EOF
