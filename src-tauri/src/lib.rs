@@ -1,6 +1,7 @@
 mod creds;
 mod keys;
 mod node;
+mod tunnel;
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -165,10 +166,7 @@ async fn destroy_node(region: String) -> Result<Vec<String>, String> {
 }
 
 fn which_wg() -> Option<String> {
-    ["/opt/homebrew/bin/wg-quick", "/usr/local/bin/wg-quick", "/usr/bin/wg-quick"]
-        .iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .map(|s| s.to_string())
+    tunnel::wg_quick().map(|s| s.to_string())
 }
 
 #[tauri::command]
@@ -176,21 +174,50 @@ fn config_file_path(region: String) -> Result<String, String> {
     Ok(config_path(&region)?.to_string_lossy().to_string())
 }
 
-/// The exact command to bring the tunnel up, for the UI to show.
-///
-/// Burrow does not yet run this itself: wg-quick needs root, and doing that properly means a
-/// privileged helper installed via SMAppService rather than prompting for a password on every
-/// connect. Showing the command is honest about where the boundary currently is.
+/// Raise the tunnel. Prompts for admin once, via the system dialog.
 #[tauri::command]
-fn connect_command(region: String) -> Result<String, String> {
-    let wg = which_wg().unwrap_or_else(|| "wg-quick".to_string());
-    Ok(format!("sudo {wg} up {}", config_path(&region)?.display()))
+async fn connect(region: String) -> Result<tunnel::Status, String> {
+    let path = config_path(&region)?;
+    if !path.exists() {
+        return Err("No configuration for this location — create the server first.".into());
+    }
+    tunnel::up(&path)?;
+
+    // Coming back from wg-quick only means the interface was created. Whether traffic actually
+    // leaves through the exit node is a different question, and the one worth answering: poll
+    // until the public address matches, rather than claiming success on an interface that exists
+    // but never handshook.
+    let endpoint = node_endpoint(&region).await.unwrap_or_default();
+    for _ in 0..10 {
+        let st = tunnel::status(&endpoint);
+        if st.tunnelled {
+            return Ok(st);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    }
+    Err("The tunnel came up but traffic is not going through it yet. \
+         Give the server another moment, then try again.".into())
 }
 
 #[tauri::command]
-fn disconnect_command(region: String) -> Result<String, String> {
-    let wg = which_wg().unwrap_or_else(|| "wg-quick".to_string());
-    Ok(format!("sudo {wg} down {}", config_path(&region)?.display()))
+async fn disconnect(region: String) -> Result<tunnel::Status, String> {
+    tunnel::down(&config_path(&region)?)?;
+    Ok(tunnel::status(""))
+}
+
+/// Current tunnel state, cheap enough to poll from the UI.
+#[tauri::command]
+async fn tunnel_status(region: String) -> Result<tunnel::Status, String> {
+    let endpoint = node_endpoint(&region).await.unwrap_or_default();
+    Ok(tunnel::status(&endpoint))
+}
+
+async fn node_endpoint(region: &str) -> Option<String> {
+    let (id, secret) = creds::load().ok()??;
+    let config = creds::config_for(&id, &secret, region).await;
+    node::find(&aws_sdk_lightsail::Client::new(&config), region)
+        .await
+        .map(|n| n.endpoint)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -207,8 +234,9 @@ pub fn run() {
             create_node,
             destroy_node,
             config_file_path,
-            connect_command,
-            disconnect_command,
+            connect,
+            disconnect,
+            tunnel_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,139 +7,163 @@
     <title>Burrow</title>
   </head>
   <body>
-    <header>
-      <div class="brand">
-        <span class="logo" aria-hidden="true"></span>
-        <h1>Burrow</h1>
+    <!-- ── 0. hero ──────────────────────────────────────────────────── -->
+    <section class="screen" id="s-hero">
+      <div class="stage">
+        <svg id="globe" width="320" height="320" viewBox="-170 -170 340 340" aria-hidden="true"></svg>
       </div>
-      <p class="tagline">Your own VPN, on your own cloud account. No subscription.</p>
-    </header>
-
-    <main id="app">
-      <!-- ───────────────────────── Onboarding ───────────────────────── -->
-      <section id="onboarding" hidden>
-        <ol class="steps">
-          <li class="step">
-            <h2><span class="n">1</span> Create a free AWS account</h2>
-            <p>
-              Skip this if you already have one. AWS asks for a card, but Burrow only ever creates
-              one small server that you can destroy whenever you like.
-            </p>
-            <button class="link" data-open="https://portal.aws.amazon.com/billing/signup">
-              Open the AWS sign-up page
-            </button>
-          </li>
-
-          <li class="step">
-            <h2><span class="n">2</span> Make a user just for Burrow</h2>
-            <p>
-              Don't use your main login. This creates a restricted user that can <em>only</em> touch
-              Lightsail, so a leaked key can't reach the rest of your account.
-            </p>
-            <button class="link" data-open="https://console.aws.amazon.com/iam/home#/users/create">
-              Open the "create user" page
-            </button>
-            <ul class="detail">
-              <li>User name: <code>burrow</code></li>
-              <li>Click <b>Next</b></li>
-              <li>Choose <b>Attach policies directly</b></li>
-              <li>Search for <code>AmazonLightsailFullAccess</code> and tick it</li>
-              <li>Click <b>Next</b>, then <b>Create user</b></li>
-            </ul>
-          </li>
-
-          <li class="step">
-            <h2><span class="n">3</span> Create an access key</h2>
-            <p>This is the part Burrow needs. It is not your password.</p>
-            <ul class="detail">
-              <li>Click the <code>burrow</code> user you just made</li>
-              <li>Open the <b>Security credentials</b> tab</li>
-              <li>Scroll to <b>Access keys</b> → <b>Create access key</b></li>
-              <li>Choose <b>Command Line Interface (CLI)</b>, tick the confirmation, <b>Next</b></li>
-              <li><b>Create access key</b></li>
-            </ul>
-            <p class="warn">
-              The secret is shown <b>once</b>. If you close that page without copying it, delete the
-              key and make another — it cannot be recovered.
-            </p>
-          </li>
-
-          <li class="step">
-            <h2><span class="n">4</span> Paste them here</h2>
-            <form id="creds-form" autocomplete="off">
-              <label>
-                Access key ID
-                <input id="akid" type="text" placeholder="AKIA…" spellcheck="false" required />
-              </label>
-              <label>
-                Secret access key
-                <input id="secret" type="password" placeholder="40 characters" spellcheck="false" required />
-              </label>
-              <div class="row">
-                <button type="submit" id="save-creds" class="primary">Check and save</button>
-                <span id="creds-msg" class="msg" role="status"></span>
-              </div>
-            </form>
-            <p class="detail">
-              Stored in your system keychain, never in a file. Burrow talks straight to AWS — there
-              is no Burrow server, and your keys never leave this machine.
-            </p>
-          </li>
-        </ol>
-      </section>
-
-      <!-- ───────────────────────── Main ───────────────────────── -->
-      <section id="main-panel" hidden>
-        <div class="card account">
-          <div>
-            <span class="label">AWS account</span>
-            <span id="acct" class="value">—</span>
-          </div>
-          <button id="forget" class="ghost">Sign out</button>
+      <div style="text-align:center">
+        <h1>Appear somewhere else.</h1>
+        <p class="lede">
+          Burrow runs a private VPN on your own cloud account. No subscription, no company in the
+          middle, no logs but yours.
+        </p>
+        <div class="row center">
+          <button class="btn primary" id="go-start">Get started</button>
         </div>
+        <p class="tiny muted" style="margin-top:14px">
+          Around $5 a month, billed by the hour. You pay AWS directly.
+        </p>
+      </div>
+    </section>
 
-        <div class="card">
-          <label class="block">
-            Location
-            <select id="region"></select>
+    <!-- ── 1. credentials ───────────────────────────────────────────── -->
+    <section class="screen" id="s-creds">
+      <p class="eyebrow">Step 1 of 3</p>
+      <h1>Connect your AWS account</h1>
+      <p class="lede">
+        Burrow needs a key so it can create a server for you. It is stored in your system keychain
+        and never leaves this machine.
+      </p>
+
+      <div class="panel">
+        <details class="help">
+          <summary>I don't have a key yet</summary>
+          <ol>
+            <li>
+              <button class="btn quiet" data-open="https://portal.aws.amazon.com/billing/signup"
+                      style="padding:0;border:0">Create a free AWS account</button>
+              if you don't have one.
+            </li>
+            <li>
+              Open the
+              <button class="btn quiet" data-open="https://console.aws.amazon.com/iam/home#/users/create"
+                      style="padding:0;border:0">create&nbsp;user</button>
+              page. Name it <code>burrow</code>.
+            </li>
+            <li>Choose <b>Attach policies directly</b>, tick <code>AmazonLightsailFullAccess</code>.</li>
+            <li>Create the user, open it, then <b>Security credentials</b> → <b>Create access key</b>.</li>
+            <li>Pick <b>Command Line Interface (CLI)</b>. The secret is shown once — copy it now.</li>
+          </ol>
+        </details>
+
+        <form id="creds-form" autocomplete="off">
+          <label class="field">
+            <span>Access key ID</span>
+            <input id="akid" type="text" placeholder="AKIA…" spellcheck="false" required />
           </label>
-
-          <p id="plan" class="detail plan">Checking price…</p>
-
-          <div id="node-state" class="state">
-            <span class="dot" id="dot"></span>
-            <span id="state-text">Checking…</span>
-          </div>
-
+          <label class="field">
+            <span>Secret access key</span>
+            <input id="secret" type="password" placeholder="40 characters" spellcheck="false" required />
+          </label>
           <div class="row">
-            <button id="create" class="primary">Create server</button>
-            <button id="destroy" class="danger" hidden>Destroy server</button>
+            <button type="submit" class="btn primary" id="test-conn">Test connection</button>
+            <button type="button" class="btn quiet" id="back-hero">Back</button>
+            <span id="creds-msg" class="msg" role="status"></span>
           </div>
-          <p class="detail">
-            Billed by the hour, so an evening costs pennies. Destroying the server stops all
-            charges — nothing is left behind.
-          </p>
-        </div>
+        </form>
+      </div>
+    </section>
 
-        <div class="card" id="connect-card" hidden>
-          <span class="label">Connect</span>
-          <p class="detail">
-            Burrow can't raise the tunnel for you yet — that needs an administrator helper, which is
-            the next thing being built. For now, run this in Terminal:
-          </p>
-          <pre id="connect-cmd" class="cmd"></pre>
-          <button id="copy-connect" class="ghost">Copy</button>
-          <p class="detail">To disconnect:</p>
-          <pre id="disconnect-cmd" class="cmd"></pre>
-          <button id="copy-disconnect" class="ghost">Copy</button>
-          <p id="wg-warn" class="warn" hidden>
-            WireGuard isn't installed. Run <code>brew install wireguard-tools</code> first.
-          </p>
+    <!-- ── 2. pick a location ───────────────────────────────────────── -->
+    <section class="screen wide" id="s-region">
+      <p class="eyebrow">Step 2 of 3</p>
+      <h1>Where should you appear?</h1>
+      <p class="lede" id="region-lede">Pick a location. Prices come straight from AWS.</p>
+      <div class="panel">
+        <div id="region-groups"></div>
+        <hr class="hr" />
+        <div class="row">
+          <button class="btn primary" id="go-connect" disabled>Next</button>
+          <button class="btn quiet" id="back-creds">Back</button>
+          <span id="region-msg" class="msg muted"></span>
         </div>
+      </div>
+    </section>
 
-        <p id="log" class="log" role="status"></p>
-      </section>
-    </main>
+    <!-- ── 3. connecting ────────────────────────────────────────────── -->
+    <section class="screen" id="s-progress">
+      <div class="stage">
+        <svg id="globe2" width="300" height="300" viewBox="-170 -170 340 340" aria-hidden="true"></svg>
+      </div>
+      <h1 id="prog-title" style="text-align:center">Digging your burrow</h1>
+      <p class="lede" id="prog-sub" style="text-align:center">This takes about two minutes.</p>
+      <div class="panel">
+        <ul class="steps" id="prog-steps">
+          <li data-k="ip"><span class="mark">✓</span> Reserving an address</li>
+          <li data-k="vm"><span class="mark">✓</span> Starting the server</li>
+          <li data-k="wg"><span class="mark">✓</span> Installing WireGuard</li>
+          <li data-k="fw"><span class="mark">✓</span> Closing every port but one</li>
+        </ul>
+        <p id="prog-msg" class="msg" role="status"></p>
+        <div class="row" id="prog-actions" hidden>
+          <button class="btn quiet" id="prog-back">Back</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 4. ready ─────────────────────────────────────────────────── -->
+    <section class="screen wide" id="s-ready">
+      <p class="eyebrow">Ready</p>
+      <h1 id="ready-title">Your burrow is open</h1>
+      <p class="lede" id="ready-sub"></p>
+
+      <div class="panel" style="margin-bottom:12px">
+        <h2>Running cost</h2>
+        <p class="tiny muted" style="margin:2px 0 14px">
+          Charged by the hour from the moment the server started. Destroying it stops everything.
+        </p>
+        <div class="cost">
+          <div>
+            <div class="k">So far</div>
+            <div class="v" id="c-sofar">$0.00</div>
+            <div class="n" id="c-uptime">just created</div>
+          </div>
+          <div>
+            <div class="k">Per day</div>
+            <div class="v" id="c-day">—</div>
+            <div class="n" id="c-hour">—</div>
+          </div>
+          <div>
+            <div class="k">If left running</div>
+            <div class="v" id="c-month">—</div>
+            <div class="n" id="c-transfer">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <h2 id="conn-title">Not connected</h2>
+            <p class="tiny muted" id="conn-sub" style="margin:2px 0 0">
+              Your traffic is still going out over your own connection.
+            </p>
+          </div>
+          <button class="btn primary" id="connect">Connect</button>
+        </div>
+        <p id="conn-msg" class="msg" style="margin-top:10px"></p>
+        <p id="wg-warn" class="msg err" hidden>
+          WireGuard isn't installed — run <code>brew install wireguard-tools</code> first.
+        </p>
+        <hr class="hr" />
+        <div class="row">
+          <button class="btn danger" id="destroy">Destroy server</button>
+          <button class="btn quiet" id="change-region">Choose another location</button>
+          <span id="ready-msg" class="msg"></span>
+        </div>
+      </div>
+    </section>
 
     <script type="module" src="/main.js"></script>
   </body>

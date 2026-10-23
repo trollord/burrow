@@ -7,8 +7,8 @@ running, pennies if you don't.
 
 You dig your own tunnel. Hence the name.
 
-> **Status: early.** The app provisions and destroys servers and manages credentials. Raising the
-> tunnel still needs one terminal command — see [Known gaps](#known-gaps).
+> **Status: early but usable.** Create a server, connect, check your address, destroy it — all
+> from the app. See [Known gaps](#known-gaps) for what's missing.
 
 ## Why
 
@@ -83,9 +83,9 @@ exists in `scripts/`.
 
 ## Known gaps
 
-- **Connecting still needs one terminal command.** `wg-quick` requires root, and doing that
-  properly means a privileged helper installed via `SMAppService`, not a password prompt on every
-  connect. The app shows the exact command meanwhile.
+- **Connecting prompts for your password each time.** `wg-quick` needs root, and Burrow currently
+  asks through the system authorisation dialog. The end state is a privileged helper registered
+  once with `SMAppService` — one prompt at install, none after.
 - **No kill-switch.** If the tunnel drops, traffic silently returns to your ISP. This is the most
   important missing feature, ahead of more locations.
 - **Requires `wireguard-tools`** (`brew install wireguard-tools`). Bundling it would remove the

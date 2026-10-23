@@ -78,6 +78,9 @@ pub struct Node {
     pub region: String,
     pub endpoint: String,
     pub state: String,
+    /// Unix seconds. Billing runs from here, so this is what the cost readout counts from —
+    /// not from when the app happened to be opened.
+    pub created_at: i64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -187,6 +190,7 @@ pub async fn find(client: &Client, region: &str) -> Option<Node> {
             .and_then(|s| s.name())
             .unwrap_or("unknown")
             .to_string(),
+        created_at: i.created_at().map(|t| t.secs()).unwrap_or_default(),
     })
 }
 
@@ -296,11 +300,12 @@ pub async fn provision(
         .map_err(|e| format!("could not set the firewall: {e}"))?;
 
     Ok(Provisioned {
-        node: Node {
+        node: find(&client, region).await.unwrap_or(Node {
             region: region.to_string(),
             endpoint: endpoint.clone(),
             state: "running".into(),
-        },
+            created_at: 0,
+        }),
         config: client_config(&client_keys.private, &server.public, &endpoint, dns),
     })
 }
