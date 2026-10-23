@@ -5,6 +5,10 @@
 # Everything is named deterministically from REGION, so teardown needs no state file: the names ARE
 # the state. A half-finished vpn-up can always be cleaned up by vpn-down, which is the property that
 # matters most when the thing being leaked costs money every month.
+#
+# These names and paths MUST match src-tauri/src/node.rs and lib.rs. The app and these scripts are
+# two front ends onto the same resources: create in one, tear down with the other. If they drift,
+# `vpn-down` silently fails to find a server the app made and it bills forever.
 REGION="${VPN_REGION:-us-east-1}"
 BUNDLE="${VPN_BUNDLE:-nano_3_0}"        # $5/mo, 1024 GB transfer. nano_ipv6_3_0 is cheaper but has
                                         # no public IPv4, so it cannot serve as a general exit node.
@@ -12,8 +16,8 @@ BLUEPRINT="${VPN_BLUEPRINT:-ubuntu_24_04}"
 ZONE="${VPN_ZONE:-${REGION}a}"
 PORT="${VPN_PORT:-51820}"
 
-INSTANCE="vpn-byoc-${REGION}"
-STATIC_IP="vpn-byoc-ip-${REGION}"
+INSTANCE="burrow-${REGION}"
+STATIC_IP="burrow-ip-${REGION}"
 
 # Tunnel addressing. /24 is far more than one peer needs, but leaves room for more without
 # renumbering the server.
@@ -38,7 +42,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # ~/Desktop, ~/Documents and ~/Downloads are TCC-protected: a root shell raised by osascript or a
 # privileged helper gets "Operation not permitted" reading a config there, which surfaces as a
 # confusing wg-quick failure that has nothing to do with WireGuard.
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vpn-byoc"
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/burrow"
 CONF_FILE="$CONF_DIR/${REGION}.conf"
 
 aws_ls() { aws lightsail --region "$REGION" "$@"; }

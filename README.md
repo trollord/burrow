@@ -1,24 +1,84 @@
 # Burrow
 
 **Your own VPN, on your own cloud account.** No subscription, no provider in the middle, no logs
-kept by anyone but you. Burrow creates a WireGuard server in your AWS account, hands you a config,
-and destroys it again when you're done. You pay AWS directly — about **$5 a month** if you leave it
+kept by anyone but you. Burrow starts a WireGuard server in your AWS account, connects you to it,
+and destroys it when you're done. You pay AWS directly — roughly **$5 a month** if you leave it
 running, pennies if you don't.
 
 You dig your own tunnel. Hence the name.
 
-> **Status: early but usable.** Create a server, connect, check your address, destroy it — all
-> from the app. See [Known gaps](#known-gaps) for what's missing.
+```
+your laptop  ──encrypted──▶  a server you own  ──▶  the internet
+                             (destroy it whenever)
+```
+
+> **Status: early but usable.** Create a server, connect, verify your address changed, destroy it.
+> See [Known gaps](#known-gaps) for what's missing.
 
 ## Why
 
-Commercial VPNs ask you to trust a company with every packet you send, and their entire business
-model depends on you believing a no-logs promise you cannot verify. The alternative has always
-existed — run WireGuard on a cheap VM — but it meant an SSH session, a hand-written config, and
-knowing what `iptables -t nat -A POSTROUTING` does.
+Commercial VPNs ask you to trust a company with every packet you send, and the business model
+rests on you believing a no-logs promise you cannot check. The alternative has always existed —
+run WireGuard on a cheap VM — but it meant an SSH session, a hand-written config, and knowing what
+`iptables -t nat -A POSTROUTING` does.
 
-Burrow is that alternative with the terminal taken out of it. The only party who can see your
-traffic is you, because the server is yours.
+Burrow is that alternative with the terminal taken out. The only party who can see your traffic is
+you, because the server is yours.
+
+---
+
+## Two ways to use it
+
+### 1. Ask Claude Code
+
+Clone the repo, open it in [Claude Code](https://claude.com/product/claude-code), and say what you
+want:
+
+> connect me to London
+
+It provisions the server, raises the tunnel, confirms your address actually changed, and tells you
+what it costs. When you're done: *"disconnect and destroy it"*.
+
+The instructions it follows are in [`CLAUDE.md`](CLAUDE.md) — worth reading even if you never use
+an agent, because it documents every failure mode this project hit.
+
+### 2. The app
+
+```bash
+npm install && npm run tauri dev
+```
+
+Paste your AWS key, pick a location, watch it dig, connect. Live cost readout, and it verifies
+you're genuinely tunnelled rather than showing a green dot that means nothing.
+
+### Or the scripts
+
+```bash
+VPN_REGION=eu-west-2 scripts/vpn-up     # provision
+scripts/vpn-check                       # prove it works
+VPN_REGION=eu-west-2 scripts/vpn-down   # destroy
+```
+
+All three paths create the same resources and mix freely — make a server in the app, destroy it
+from the terminal, whatever suits.
+
+Either way you'll need an AWS key (below) and `brew install wireguard-tools`.
+
+---
+
+## Getting an AWS key
+
+Burrow needs a key that can create Lightsail servers and nothing else.
+
+1. Sign in at **console.aws.amazon.com** — the root user signs in with the account *email*, not a
+   username.
+2. **IAM → Users → Create user**, call it `burrow`.
+3. **Attach policies directly** → tick `AmazonLightsailFullAccess`.
+4. Open the user → **Security credentials** → **Create access key** → **Command Line Interface**.
+5. Copy both values. **The secret is shown once.**
+
+The app stores them in your system keychain. For the scripts, run `aws configure`. Never create
+access keys on the root user.
 
 ## Locations
 
@@ -28,91 +88,103 @@ traffic is you, because the server is yours.
 | Europe | Frankfurt, London, Ireland |
 | Australia | Sydney |
 
-Adding more is one line each — the instance size and availability zone are both discovered per
-region at provision time, so nothing else needs changing.
+Any of Lightsail's 19 regions works — instance size and availability zone are discovered per
+region, so adding one is a line in a list.
 
 ## What it costs
 
-About **$5 a month**, billed hourly, which is pennies for an evening. Burrow reads the real price
-from AWS and shows it before you commit, because it is not uniform: **Sydney charges the same $5
-for 512 GB of transfer where Virginia gives 1024 GB**, and the instance size is even called
-something different there (`nano_3_2` rather than `nano_3_0`).
+About **$5 a month**, billed hourly, so an evening is a couple of cents. Burrow reads the real
+price from AWS rather than hardcoding it, because it isn't uniform: **Sydney charges the same $5
+for 512 GB of traffic where Virginia gives 1024 GB**, and the instance size is named differently
+there.
 
-**Lightsail, not EC2** — this is the decision the whole project rests on. EC2 charges about
-$0.09/GB egress, and *all* your browsing leaves through that instance. 1 TB would be roughly $90.
-On EC2 this would cost more than the subscription it replaces.
+**Lightsail, not EC2** — the decision the whole project rests on. EC2 bills around $0.09/GB
+egress, and *all* your browsing leaves through that instance; 1 TB would be roughly $90. On EC2
+this would cost more than the subscription it replaces.
 
-## Using it
+---
 
-1. Open Burrow. It walks you through creating an AWS account, a restricted IAM user, and an access
-   key, with a link to each page.
-2. Paste the access key. Burrow checks it against AWS immediately and tells you if the Lightsail
-   permission is missing, rather than failing later.
-3. Pick a location, click **Create server**. Takes about two minutes.
-4. Connect, browse, and click **Destroy server** when you're done. Billing stops.
+## How it's built
 
-## Design
+**No Burrow server exists.** The app talks straight to the AWS API from your machine. There's no
+backend, no account to create, nothing of yours on our infrastructure — because there isn't any.
+It's also the only honest way to sell "your own VPN": we couldn't log your traffic if we wanted to.
 
-**No Burrow server.** The app talks straight to the AWS API from your machine. There is no backend,
-no account to create, and nothing of yours on our infrastructure — because there isn't any. This
-is also the only honest way to sell "your own VPN".
+**Credentials live in the OS keychain**, never in a config file.
 
-**Credentials go in the OS keychain**, never in a config file: macOS Keychain, Windows Credential
-Manager, Secret Service on Linux.
-
-**Keys are generated in-process.** Burrow uses `x25519-dalek` rather than shelling out to
-`wg genkey`, so no private key is ever visible in the process table. The output is verified
-byte-identical to `wg pubkey` by a unit test, because a mismatch there would break every tunnel
-with no useful error.
+**Keys are generated in-process** with `x25519-dalek` rather than shelling to `wg genkey`, so no
+private key ever appears in the process table. A unit test asserts the public key matches what
+`wg pubkey` derives — a mismatch would break every tunnel with no useful error.
 
 **The server is never logged into.** Both keypairs are made locally and handed to the instance in
 its launch script, so it configures itself on first boot. Port 22 is never opened; only UDP 51820.
 
-*Trade-off, stated plainly:* the server's private key travels through the Lightsail API over TLS
-and is readable in user-data on the instance. Fine for a single-user node you destroy on demand.
-Multi-tenant would require generating on-box and fetching only the public key.
+> *Trade-off, stated plainly:* the server's private key travels through the Lightsail API over TLS
+> and is readable in user-data on the box. Fine for a single-user node you destroy on demand.
+> Multi-tenant would need keys generated on the server with only the public key fetched back.
 
-**Names are the state.** Resources are named from the region (`burrow-us-east-1`), so there's no
-local state file to lose and a half-finished provision can always be cleaned up.
+**Names are the state.** Resources are named from the region (`burrow-eu-west-2`), so there's no
+state file to lose and a half-finished provision can always be cleaned up.
 
-**IPv6 fails closed.** The client config carries both an IPv4 and an IPv6 address. Without the v6
-address, macOS silently refuses the `::/1` routes, `wg-quick` reports it and carries on, and every
-IPv6-capable site — Google, YouTube, Cloudflare — is reached over your real connection while IPv4
-looks perfectly tunnelled. That bug shipped in an earlier prototype and is exactly why `vpn-check`
-exists in `scripts/`.
+**Teardown actually tears down.** It deletes the instance *and* releases the static IP — an
+orphaned Lightsail IP bills monthly, forever — then re-lists both to prove nothing survived.
+
+**IPv6 fails closed.** Both ends carry ULA addresses. Without them macOS silently refuses the
+`::/1` routes and every IPv6-capable site sees your real address while IPv4 looks perfectly
+tunnelled. That bug shipped in an earlier prototype, which is why the next section exists.
+
+---
+
+## Verifying it
+
+A changed IPv4 address is not proof. `scripts/vpn-check` tests five things:
+
+| Check | Why it's there |
+|---|---|
+| IPv4 egress | matches the exit node |
+| **IPv6 egress** | the leak that hides behind a perfectly working IPv4 |
+| DNS | queries exit at the node, not your ISP |
+| First hop | packets really enter the tunnel |
+| Geolocation | what the internet reports back |
+
+Two things a shell can't test: **WebRTC** can expose your address through the browser
+(`browserleaks.com/webrtc`), and **browser geolocation** resolves your position from nearby WiFi
+regardless of any VPN — only revoking the permission fixes that.
 
 ## Known gaps
 
-- **Connecting prompts for your password each time.** `wg-quick` needs root, and Burrow currently
-  asks through the system authorisation dialog. The end state is a privileged helper registered
-  once with `SMAppService` — one prompt at install, none after.
-- **No kill-switch.** If the tunnel drops, traffic silently returns to your ISP. This is the most
+- **Connecting prompts for your password each time.** `wg-quick` needs root, so Burrow asks via
+  the system authorisation dialog. A privileged helper registered with `SMAppService` would make
+  it one prompt at install and none after. Next on the list.
+- **No kill-switch.** If the tunnel drops, traffic silently returns to your ISP. The most
   important missing feature, ahead of more locations.
-- **Requires `wireguard-tools`** (`brew install wireguard-tools`). Bundling it would remove the
-  last manual dependency.
-- macOS only in practice, though nothing in the Rust is macOS-specific.
+- **Requires `wireguard-tools`.** Bundling it would remove the last manual dependency.
+- macOS in practice, though nothing in the Rust is macOS-specific.
+
+## Layout
+
+| | |
+|---|---|
+| `CLAUDE.md` | Driving this with an agent, and every failure mode hit so far |
+| `src/` | Frontend — plain HTML, CSS and JS, no framework |
+| `src/globe.js` | The hairline globe and the travelling-light animation |
+| `src-tauri/src/creds.rs` | Keychain storage and credential validation |
+| `src-tauri/src/keys.rs` | WireGuard keypairs + the `wg pubkey` compatibility test |
+| `src-tauri/src/node.rs` | Lightsail provisioning and teardown |
+| `src-tauri/src/tunnel.rs` | Privileged connect, and the "am I really tunnelled" check |
+| `scripts/` | The same thing in bash |
 
 ## Building
 
 ```bash
 npm install
-npm run tauri dev      # run it
-npm run tauri build    # bundle it
+npm run tauri dev           # run it
+npm run tauri build         # bundle it
 cd src-tauri && cargo test --lib
 ```
 
-Needs Rust and Node. No Xcode required.
-
-## Repo layout
-
-| | |
-|---|---|
-| `src/` | Frontend — plain HTML, CSS and JS, no framework |
-| `src-tauri/src/creds.rs` | Keychain storage and credential validation |
-| `src-tauri/src/keys.rs` | WireGuard keypairs, with the `wg pubkey` compatibility test |
-| `src-tauri/src/node.rs` | Lightsail provisioning and teardown |
-| `scripts/` | The original shell prototype — `vpn-up`, `vpn-down`, `vpn-check`. Still the quickest way to test a change against real AWS |
+Rust and Node. No Xcode required.
 
 ## Licence
 
-MIT.
+MIT © Bytelights Private Limited.
