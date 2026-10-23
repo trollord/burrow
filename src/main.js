@@ -59,11 +59,20 @@ async function enterMain(identity) {
 
   const select = $("region");
   if (!select.options.length) {
+    // Grouped by continent: a flat list of AWS region codes is meaningless to the person this
+    // app is for, who is choosing "somewhere in Europe", not eu-central-1.
+    const groups = new Map();
     for (const r of await invoke("regions")) {
+      if (!groups.has(r.group)) {
+        const g = document.createElement("optgroup");
+        g.label = r.group;
+        groups.set(r.group, g);
+        select.appendChild(g);
+      }
       const o = document.createElement("option");
       o.value = r.id;
-      o.textContent = `${r.label} (${r.id})`;
-      select.appendChild(o);
+      o.textContent = r.label;
+      groups.get(r.group).appendChild(o);
     }
   }
   await refresh();
@@ -74,8 +83,23 @@ function setState(text, tone) {
   $("dot").className = `dot ${tone}`;
 }
 
+async function showPlan(region) {
+  const el = $("plan");
+  el.textContent = "Checking price…";
+  try {
+    const p = await invoke("region_plan", { region });
+    // Transfer allowance is the number that actually varies and the one that can surprise people:
+    // Sydney is the same $5 as Virginia for half the data.
+    el.textContent =
+      `$${p.usd_per_month.toFixed(2)} per month · ${p.transfer_gb} GB of traffic included · ${p.bundle_id}`;
+  } catch (err) {
+    el.textContent = String(err);
+  }
+}
+
 async function refresh() {
   const region = $("region").value;
+  showPlan(region);
   setState("Checking…", "");
   let node = null;
   try {

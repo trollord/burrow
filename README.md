@@ -20,9 +20,23 @@ knowing what `iptables -t nat -A POSTROUTING` does.
 Burrow is that alternative with the terminal taken out of it. The only party who can see your
 traffic is you, because the server is yours.
 
+## Locations
+
+| | |
+|---|---|
+| United States | Virginia, Ohio, Oregon |
+| Europe | Frankfurt, London, Ireland |
+| Australia | Sydney |
+
+Adding more is one line each — the instance size and availability zone are both discovered per
+region at provision time, so nothing else needs changing.
+
 ## What it costs
 
-One Lightsail `nano_3_0` instance: **$5/month, billed hourly, 1 TB of transfer included.**
+About **$5 a month**, billed hourly, which is pennies for an evening. Burrow reads the real price
+from AWS and shows it before you commit, because it is not uniform: **Sydney charges the same $5
+for 512 GB of transfer where Virginia gives 1024 GB**, and the instance size is even called
+something different there (`nano_3_2` rather than `nano_3_0`).
 
 **Lightsail, not EC2** — this is the decision the whole project rests on. EC2 charges about
 $0.09/GB egress, and *all* your browsing leaves through that instance. 1 TB would be roughly $90.
@@ -74,7 +88,6 @@ exists in `scripts/`.
   connect. The app shows the exact command meanwhile.
 - **No kill-switch.** If the tunnel drops, traffic silently returns to your ISP. This is the most
   important missing feature, ahead of more locations.
-- **US regions only** so far.
 - **Requires `wireguard-tools`** (`brew install wireguard-tools`). Bundling it would remove the
   last manual dependency.
 - macOS only in practice, though nothing in the Rust is macOS-specific.

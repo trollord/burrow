@@ -122,6 +122,11 @@ sed -i '' \
   "$USERDATA"
 say "ok"
 
+if [ -z "$BUNDLE" ]; then
+  BUNDLE="$(cheapest_bundle)"
+  [ -n "$BUNDLE" ] && [ "$BUNDLE" != "None" ] || die "could not find an instance size in $REGION"
+fi
+
 step "Creating instance ($INSTANCE, $BUNDLE, $BLUEPRINT)"
 aws_ls create-instances \
   --instance-names "$INSTANCE" \

@@ -9,9 +9,6 @@ use aws_sdk_lightsail::types::PortInfo;
 use aws_sdk_lightsail::Client;
 use serde::Serialize;
 
-/// $5/mo with 1024 GB of transfer. Not nano_ipv6_3_0 at $3.50 — that one is IPv6-only and has no
-/// public IPv4 address, so it cannot act as a general-purpose exit node.
-const BUNDLE: &str = "nano_3_0";
 const BLUEPRINT: &str = "ubuntu_24_04";
 const PORT: i32 = 51820;
 
@@ -25,6 +22,55 @@ pub fn instance_name(region: &str) -> String {
 }
 pub fn static_ip_name(region: &str) -> String {
     format!("burrow-ip-{region}")
+}
+
+/// What a region will actually cost, read from AWS rather than assumed.
+#[derive(Serialize, Clone, Debug)]
+pub struct Plan {
+    pub bundle_id: String,
+    pub usd_per_month: f32,
+    pub transfer_gb: i32,
+}
+
+/// Pick the cheapest bundle in this region that can actually serve as an exit node.
+///
+/// Bundle ids are region-suffixed — `nano_3_0` in the US and Europe, `nano_3_2` in Sydney — so
+/// hardcoding one works until someone picks Australia and then fails at provision time. The
+/// allowance differs too: 1024 GB in Virginia, 512 GB in Sydney for the same $5.
+///
+/// `ipv6`-suffixed bundles are excluded deliberately. They are cheaper ($3.50) and look tempting,
+/// but have no public IPv4 address, so a tunnel to one could never carry ordinary traffic.
+pub async fn plan_for(client: &Client) -> Result<Plan, String> {
+    let out = client
+        .get_bundles()
+        .send()
+        .await
+        .map_err(|e| format!("could not read the price list: {e}"))?;
+
+    out.bundles()
+        .iter()
+        .filter(|b| {
+            b.supported_platforms()
+                .iter()
+                .any(|p| p.as_str() == "LINUX_UNIX")
+        })
+        .filter(|b| b.is_active().unwrap_or(false))
+        .filter(|b| {
+            let id = b.bundle_id().unwrap_or_default();
+            !id.contains("ipv6") && !id.contains("win")
+        })
+        .min_by(|a, b| {
+            a.price()
+                .unwrap_or(f32::MAX)
+                .partial_cmp(&b.price().unwrap_or(f32::MAX))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|b| Plan {
+            bundle_id: b.bundle_id().unwrap_or_default().to_string(),
+            usd_per_month: b.price().unwrap_or_default(),
+            transfer_gb: b.transfer_per_month_in_gb().unwrap_or_default(),
+        })
+        .ok_or_else(|| "no usable instance size is offered in this location".to_string())
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -115,6 +161,20 @@ fn client_config(client_private: &str, server_public: &str, endpoint: &str, dns:
     )
 }
 
+async fn first_zone(client: &Client, region: &str) -> Option<String> {
+    let out = client
+        .get_regions()
+        .include_availability_zones(true)
+        .send()
+        .await
+        .ok()?;
+    out.regions()
+        .iter()
+        .find(|r| r.name().map(|n| n.as_str()) == Some(region))
+        .and_then(|r| r.availability_zones().first())
+        .and_then(|z| z.zone_name().map(String::from))
+}
+
 pub async fn find(client: &Client, region: &str) -> Option<Node> {
     let name = instance_name(region);
     let out = client.get_instance().instance_name(&name).send().await.ok()?;
@@ -147,6 +207,10 @@ pub async fn provision(
         ));
     }
 
+    // Read the price list before creating anything: a region that offers no usable size should
+    // fail here, for free, rather than after an IP has been allocated.
+    let plan = plan_for(&client).await?;
+
     let server = keys::generate();
     let client_keys = keys::generate();
 
@@ -175,13 +239,17 @@ pub async fn provision(
         .and_then(|o| o.static_ip().and_then(|s| s.ip_address().map(String::from)))
         .ok_or("allocated an IP address but could not read it back")?;
 
-    let zone = format!("{region}a");
+    // Don't assume "<region>a" exists; ask. It happens to hold everywhere Lightsail runs today,
+    // but a wrong zone fails the create with an error that reads like a quota problem.
+    let zone = first_zone(&client, region)
+        .await
+        .unwrap_or_else(|| format!("{region}a"));
     client
         .create_instances()
         .instance_names(&iname)
         .availability_zone(&zone)
         .blueprint_id(BLUEPRINT)
-        .bundle_id(BUNDLE)
+        .bundle_id(&plan.bundle_id)
         .user_data(launch_script(&server.private, &client_keys.public))
         .send()
         .await

@@ -5,12 +5,17 @@ mod node;
 use serde::Serialize;
 use std::path::PathBuf;
 
-/// Only US regions for now. Lightsail has many more; adding them is a one-line change once the
-/// single-region flow is proven.
-const REGIONS: &[(&str, &str)] = &[
-    ("us-east-1", "Virginia"),
-    ("us-east-2", "Ohio"),
-    ("us-west-2", "Oregon"),
+/// Locations offered in the picker. Lightsail has 19 regions; these are the ones people actually
+/// want for a VPN. Adding more is a line each — bundle and availability zone are both discovered
+/// per region at provision time, so nothing else needs touching.
+const REGIONS: &[(&str, &str, &str)] = &[
+    ("us-east-1", "Virginia", "United States"),
+    ("us-east-2", "Ohio", "United States"),
+    ("us-west-2", "Oregon", "United States"),
+    ("eu-central-1", "Frankfurt", "Europe"),
+    ("eu-west-2", "London", "Europe"),
+    ("eu-west-1", "Ireland", "Europe"),
+    ("ap-southeast-2", "Sydney", "Australia"),
 ];
 
 const DEFAULT_DNS: &str = "1.1.1.1, 1.0.0.1";
@@ -19,11 +24,27 @@ const DEFAULT_DNS: &str = "1.1.1.1, 1.0.0.1";
 struct Region {
     id: &'static str,
     label: &'static str,
+    group: &'static str,
 }
 
 #[tauri::command]
 fn regions() -> Vec<Region> {
-    REGIONS.iter().map(|(id, label)| Region { id, label }).collect()
+    REGIONS
+        .iter()
+        .map(|(id, label, group)| Region { id, label, group })
+        .collect()
+}
+
+/// What this location costs, read live from AWS.
+///
+/// Prices and especially transfer allowances are not uniform: Sydney charges the same $5 for half
+/// the data as Virginia, and the bundle is called something different there. Showing the real
+/// numbers before someone commits is worth the extra round trip.
+#[tauri::command]
+async fn region_plan(region: String) -> Result<node::Plan, String> {
+    let (id, secret) = creds::load()?.ok_or("no credentials saved")?;
+    let config = creds::config_for(&id, &secret, &region).await;
+    node::plan_for(&aws_sdk_lightsail::Client::new(&config)).await
 }
 
 /// Configs live outside the app bundle and outside any synced folder.
@@ -181,6 +202,7 @@ pub fn run() {
             setup_state,
             save_credentials,
             forget_credentials,
+            region_plan,
             node_status,
             create_node,
             destroy_node,

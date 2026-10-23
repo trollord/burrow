@@ -43,6 +43,12 @@ CONF_FILE="$CONF_DIR/${REGION}.conf"
 
 aws_ls() { aws lightsail --region "$REGION" "$@"; }
 
+cheapest_bundle() {
+  aws_ls get-bundles \
+    --query "sort_by(bundles[?contains(supportedPlatforms,'LINUX_UNIX') && isActive && !contains(bundleId,'ipv6') && !contains(bundleId,'win')],&price)[0].bundleId" \
+    --output text 2>/dev/null
+}
+
 say()  { printf '  %s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
