@@ -159,7 +159,29 @@ regardless of any VPN — only revoking the permission fixes that.
 - **No kill-switch.** If the tunnel drops, traffic silently returns to your ISP. The most
   important missing feature, ahead of more locations.
 - **Requires `wireguard-tools`.** Bundling it would remove the last manual dependency.
-- macOS in practice, though nothing in the Rust is macOS-specific.
+- **macOS only.** See below.
+
+## Windows and Linux
+
+Not supported yet. The halves differ:
+
+**Already portable** — the Tauri shell, the AWS SDK, credential storage (`keyring` has
+Windows Credential Manager and Secret Service backends compiled in), key generation, the whole
+frontend, and of course the Ubuntu server itself.
+
+**Not portable** — everything in `src-tauri/src/tunnel.rs`. It shells to `wg-quick`, elevates with
+`osascript`, and reads `ifconfig`. Windows has none of those: WireGuard there registers a tunnel
+as a **service** via `wireguard.exe /installtunnelservice`, elevates through UAC, and reports
+state through the service rather than an interface listing.
+
+There is also one outright bug: `config_dir()` reads `HOME`, which Windows does not set
+(`USERPROFILE`). On Windows that fails *after* a billable server has been created — the worst
+place to fail. It needs fixing before anyone runs this there.
+
+Linux is closer: `wg-quick` exists, `ifconfig` may not (`ip addr` instead), and elevation would
+want `pkexec` rather than `osascript`.
+
+The `scripts/` work anywhere bash, the AWS CLI and `wireguard-tools` do, which includes WSL.
 
 ## Layout
 
