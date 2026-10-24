@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Your own WireGuard VPN, on your own cloud account"
 authors = ["the Burrow contributors"]
 edition = "2024"
+default-run = "burrow"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -35,6 +36,7 @@ tokio = { version = "1", features = ["full"] }
 # Service on Linux) and never touch a config file on disk.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
+libc = "0.2"
 base64 = "0.22"
 rand = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
@@ -47,3 +49,13 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# The privileged helper. A separate binary so it can run as root under launchd with none of the
+# app's surface area — it links no AWS SDK, no webview, nothing but std.
+[[bin]]
+name = "burrow"
+path = "src/main.rs"
+
+[[bin]]
+name = "burrow-helper"
+path = "src/bin/burrow-helper.rs"

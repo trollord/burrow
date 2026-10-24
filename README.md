@@ -136,6 +136,18 @@ state file to lose and a half-finished provision can always be cleaned up.
 **Teardown actually tears down.** It deletes the instance *and* releases the static IP — an
 orphaned Lightsail IP bills monthly, forever — then re-lists both to prove nothing survived.
 
+**Connecting asks for admin once, not every time.** `wg-quick` rewrites your routing table and
+DNS, so it must run as root. Burrow installs a small root daemon — you approve once and never
+again.
+
+The design detail that matters: **the helper accepts no file path and no config text.** A
+WireGuard config can carry `PostUp = <any command>`, which `wg-quick` runs as root, so a helper
+that took a path would be a local privilege escalation — and so would the tempting shortcut of a
+passwordless `sudo wg-quick` rule, since the configs live in a user-writable directory. Instead
+the helper takes a region name and two validated keys, and writes its own config into a
+root-owned directory with the `PostUp` lines fixed in its source. There is no input through which
+a command can reach root. Its socket is chowned to the installing user at mode 0600.
+
 **IPv6 fails closed.** Both ends carry ULA addresses. Without them macOS silently refuses the
 `::/1` routes and every IPv6-capable site sees your real address while IPv4 looks perfectly
 tunnelled. That bug shipped in an earlier prototype, which is why the next section exists.
@@ -160,9 +172,6 @@ regardless of any VPN — only revoking the permission fixes that.
 
 ## Known gaps
 
-- **Connecting prompts for your password each time.** `wg-quick` needs root, so Burrow asks via
-  the system authorisation dialog. A privileged helper registered with `SMAppService` would make
-  it one prompt at install and none after. Next on the list.
 - **No kill-switch.** If the tunnel drops, traffic silently returns to your ISP. The most
   important missing feature, ahead of more locations.
 - **Requires `wireguard-tools`.** Bundling it would remove the last manual dependency.
@@ -204,7 +213,9 @@ The `scripts/` work anywhere bash, the AWS CLI and `wireguard-tools` do, which i
 | `src-tauri/src/paths.rs` | Where files live, and the JSON helpers |
 | `src-tauri/src/keys.rs` | WireGuard keypairs + the `wg pubkey` compatibility test |
 | `src-tauri/src/node.rs` | Lightsail provisioning and teardown |
-| `src-tauri/src/tunnel.rs` | Privileged connect, and the "am I really tunnelled" check |
+| `src-tauri/src/tunnel.rs` | Connect/disconnect, and the "am I really tunnelled" check |
+| `src-tauri/src/bin/burrow-helper.rs` | The root daemon, and the privilege boundary |
+| `src-tauri/src/helper.rs` | Its client, and the one-time install |
 | `scripts/` | The same thing in bash |
 
 ## Building

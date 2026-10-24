@@ -89,6 +89,11 @@ pub struct Provisioned {
     /// A complete wg-quick config. Holds the client private key, so it is written straight to disk
     /// by the caller and never logged.
     pub config: String,
+    /// The same material as typed fields, for the privileged helper. It builds its own config
+    /// from these rather than being handed a file — a config can carry PostUp commands, and
+    /// anything the helper does not accept as input cannot be abused as input.
+    pub client_private_key: String,
+    pub server_public_key: String,
 }
 
 /// Lightsail PREPENDS its own `#!/bin/sh` bootstrap to user-data and runs the concatenation under
@@ -307,6 +312,8 @@ pub async fn provision(
             created_at: 0,
         }),
         config: client_config(&client_keys.private, &server.public, &endpoint, dns),
+        client_private_key: client_keys.private,
+        server_public_key: server.public,
     })
 }
 

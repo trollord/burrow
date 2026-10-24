@@ -27,3 +27,6 @@ dist-ssr
 # but this is a backstop in case anyone points it at the repo.
 *.conf
 conf/
+
+# Built helper binary, produced by `npm run helper`
+src-tauri/binaries/

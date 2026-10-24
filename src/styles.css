@@ -271,3 +271,15 @@ table.sessions tr:last-child td { border-bottom: 0; }
   display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 600;
   color: var(--good); letter-spacing: .02em;
 }
+
+/* ── one-time helper offer ────────────────────────────────────────────── */
+
+.notice {
+  display: flex; align-items: flex-start; gap: 14px;
+  margin-top: 14px; padding: 14px 16px;
+  border: 1px solid var(--hair); border-radius: 11px; background: var(--blue-50);
+}
+.notice div { flex: 1; }
+.notice b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+.notice span { display: block; font-size: 12.5px; color: var(--muted); }
+.notice .btn { flex: none; }

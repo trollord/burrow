@@ -804,6 +804,7 @@ dependencies = [
  "aws-sdk-sts",
  "base64 0.22.1",
  "keyring",
+ "libc",
  "rand",
  "serde",
  "serde_json",

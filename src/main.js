@@ -403,6 +403,37 @@ function paintCost() {
   $("c-transfer").textContent = `${plan.transfer_gb} GB included`;
 }
 
+// The helper turns connecting from "approve every time" into "approve once". Offered rather than
+// forced: it installs a root daemon, which is not something to do behind someone's back.
+async function paintHelperOffer() {
+  try {
+    const st = await invoke("helper_state");
+    show($("helper-offer"), !st.running);
+  } catch {
+    show($("helper-offer"), false);
+  }
+}
+
+$("install-helper").addEventListener("click", async () => {
+  const btn = $("install-helper"), msg = $("conn-msg");
+  btn.disabled = true;
+  btn.textContent = "Installing…";
+  msg.className = "msg muted";
+  msg.textContent = "Approve the prompt — this is the last time you will see it.";
+  try {
+    await invoke("install_helper");
+    msg.textContent = "Done. Connecting will not ask again.";
+    msg.className = "msg ok";
+    await paintHelperOffer();
+  } catch (err) {
+    msg.textContent = String(err) === "cancelled" ? "Cancelled." : String(err);
+    msg.className = String(err) === "cancelled" ? "msg muted" : "msg err";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Set up";
+  }
+});
+
 async function enterReady() {
   go("s-ready");
   const region = node.region;
@@ -411,6 +442,7 @@ async function enterReady() {
   show($("wg-warn"), !wgInstalled);
   $("connect").disabled = !wgInstalled;
   paintTunnel(await invoke("tunnel_status", { region }).catch(() => null));
+  paintHelperOffer();
   if (!plans[region]) {
     try { plans[region] = await invoke("region_plan", { region }); } catch { /* cost stays blank */ }
   }

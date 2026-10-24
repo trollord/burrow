@@ -199,6 +199,16 @@
           <button class="btn primary" id="connect">Connect</button>
         </div>
         <p id="conn-msg" class="msg" style="margin-top:10px"></p>
+        <div id="helper-offer" class="notice" hidden>
+          <div>
+            <b>Stop being asked for your password</b>
+            <span>
+              Burrow asks for admin every time it connects, because changing your routes needs
+              root. A one-time helper does it instead — you approve once, never again.
+            </span>
+          </div>
+          <button class="btn" id="install-helper">Set up</button>
+        </div>
         <p id="wg-warn" class="msg err" hidden>
           WireGuard isn't installed — run <code>brew install wireguard-tools</code> first.
         </p>

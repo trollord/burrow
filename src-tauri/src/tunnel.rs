@@ -35,7 +35,7 @@ fn osa_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn run_privileged(shell_cmd: &str) -> Result<String, String> {
+pub fn run_privileged(shell_cmd: &str) -> Result<String, String> {
     let script = format!(
         "do shell script \"{}\" with administrator privileges",
         osa_escape(shell_cmd)
@@ -88,6 +88,25 @@ pub fn status(expected_endpoint: &str) -> Status {
         && public_ip == expected_endpoint;
 
     Status { up, public_ip, tunnelled }
+}
+
+/// Raise the tunnel.
+///
+/// Goes through the privileged helper when it is installed, which is silent. Falls back to the
+/// authorisation dialog otherwise, so the app still works before the helper is set up — just with
+/// a prompt every time, which is the thing the helper exists to remove.
+pub fn up_region(region: &str, config: &Path) -> Result<(), String> {
+    if crate::helper::available() {
+        return crate::helper::up(region);
+    }
+    up(config)
+}
+
+pub fn down_region(region: &str, config: &Path) -> Result<(), String> {
+    if crate::helper::available() {
+        return crate::helper::down(region);
+    }
+    down(config)
 }
 
 pub fn up(config: &Path) -> Result<(), String> {

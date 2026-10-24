@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "helper": "TRIPLE=$(rustc -vV | sed -n 's|host: ||p') && mkdir -p src-tauri/binaries && touch \"src-tauri/binaries/burrow-helper-$TRIPLE\" && cargo build --release --manifest-path src-tauri/Cargo.toml --bin burrow-helper && cp \"${CARGO_TARGET_DIR:-src-tauri/target}/release/burrow-helper\" \"src-tauri/binaries/burrow-helper-$TRIPLE\"",
+    "app": "npm run helper && tauri build --bundles app"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

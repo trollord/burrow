@@ -1,4 +1,5 @@
 mod creds;
+mod helper;
 mod keys;
 mod node;
 mod paths;
@@ -149,6 +150,16 @@ async fn create_node(region: String) -> Result<node::Node, String> {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("could not secure the config file: {e}"))?;
     }
+    // If the helper is installed, give it the tunnel as typed fields. It writes its own
+    // root-owned config from them — the app's copy in ~/.config is never what runs as root.
+    if helper::available() {
+        let _ = helper::install_config(
+            &region,
+            &result.client_private_key,
+            &result.server_public_key,
+            &result.node.endpoint,
+        );
+    }
     Ok(result.node)
 }
 
@@ -157,6 +168,9 @@ async fn destroy_node(region: String) -> Result<Vec<String>, String> {
     let (id, secret) = creds::active_credentials()?;
     let steps = node::destroy(&id, &secret, &region).await?;
     let _ = std::fs::remove_file(config_file(&region)?);
+    if helper::available() {
+        let _ = helper::remove(&region);
+    }
     Ok(steps)
 }
 
@@ -168,7 +182,7 @@ async fn connect(region: String) -> Result<tunnel::Status, String> {
     if !path.exists() {
         return Err("No configuration for this location — create the server first.".into());
     }
-    tunnel::up(&path)?;
+    tunnel::up_region(&region, &path)?;
 
     // Returning from wg-quick only means an interface was created. Whether traffic actually
     // leaves through the exit node is the question worth answering, so poll until the public
@@ -191,7 +205,7 @@ async fn connect(region: String) -> Result<tunnel::Status, String> {
 async fn disconnect(region: String) -> Result<tunnel::Status, String> {
     // Read the counters BEFORE tearing the interface down — they vanish with it.
     let _ = sessions::end();
-    tunnel::down(&config_file(&region)?)?;
+    tunnel::down_region(&region, &config_file(&region)?)?;
     Ok(tunnel::status(""))
 }
 
@@ -206,6 +220,37 @@ async fn node_endpoint(region: &str) -> Option<String> {
     node::find(&aws_sdk_lightsail::Client::new(&config), region)
         .await
         .map(|n| n.endpoint)
+}
+
+// ── privileged helper ─────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct HelperState {
+    installed: bool,
+    running: bool,
+}
+
+#[tauri::command]
+fn helper_state() -> HelperState {
+    HelperState {
+        installed: helper::installed(),
+        running: helper::available(),
+    }
+}
+
+/// Install the helper. One admin prompt, then connecting never asks again.
+#[tauri::command]
+async fn install_helper() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(helper::install)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn uninstall_helper() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(helper::uninstall)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ── sessions ──────────────────────────────────────────────────────────────
@@ -249,6 +294,9 @@ pub fn run() {
             connect,
             disconnect,
             tunnel_status,
+            helper_state,
+            install_helper,
+            uninstall_helper,
             usage,
         ])
         .run(tauri::generate_context!())
