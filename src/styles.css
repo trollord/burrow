@@ -249,3 +249,25 @@ table.sessions td { padding: 6px 0; border-bottom: 1px solid var(--hair-soft); c
 table.sessions td:first-child { color: var(--ink); }
 table.sessions td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 table.sessions tr:last-child td { border-bottom: 0; }
+
+/* ── running servers ──────────────────────────────────────────────────── */
+
+.running {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--blue-300); border-radius: 11px;
+  background: var(--blue-50); margin-bottom: 8px;
+}
+.running .pip {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--good); box-shadow: 0 0 0 3px rgba(16, 138, 90, .15);
+}
+.running .what { flex: 1; min-width: 0; }
+.running .what b { display: block; font-weight: 600; }
+.running .what span {
+  display: block; font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.region .badge {
+  display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 600;
+  color: var(--good); letter-spacing: .02em;
+}

@@ -115,6 +115,12 @@ path, do the same.
 **Bundle ids are region-suffixed** — `nano_3_0` in the US and Europe, `nano_3_2` in Sydney — and
 allowances differ (1024 GB vs 512 GB for the same $5). Discover the bundle; never hardcode it.
 
+**Show what already exists before offering to create more.** The app once took you from "key
+added" straight to the location picker without checking, so a server that had been billing since
+the previous night was invisible until AWS refused to create a second one in that region. Anything
+that spends money must be visible before the button that spends more. `all_nodes` sweeps every
+region concurrently off one keychain read.
+
 **`running` is not `ready`.** A VM can boot and report running with the install failed. `vpn-up`
 polls for a marker the launch script writes last and prints the setup log if it never appears.
 

@@ -117,7 +117,7 @@ $("creds-form").addEventListener("submit", async (e) => {
 async function enterRegions() {
   go("s-region");
   const wrap = $("region-groups");
-  if (wrap.childElementCount) return;
+  if (wrap.childElementCount) { paintRunning(); return; }
 
   const regions = await invoke("regions");
   const groups = new Map();
@@ -147,6 +147,8 @@ async function enterRegions() {
     wrap.append(grid);
   }
 
+  paintRunning();
+
   // Prices are fetched per region, in parallel. They differ in ways people do not expect —
   // Sydney bills the same $5 for half the traffic — so they belong on the card, not in a footnote.
   for (const r of regions) {
@@ -163,12 +165,93 @@ async function enterRegions() {
   }
 }
 
+let running = [];   // servers that exist right now, whatever the UI is showing
+
+/// Find every running server and show it before anything else can be created.
+///
+/// This is the fix for a real failure: after adding a key the app went straight to the picker
+/// without ever checking, so a server that had been billing since the night before was invisible
+/// until AWS refused to make a second one.
+async function paintRunning() {
+  try { running = await invoke("all_nodes"); } catch { running = []; }
+  const wrap = $("running-list");
+  show($("running-panel"), running.length > 0);
+  wrap.replaceChildren();
+
+  for (const n of running) {
+    const row = document.createElement("div");
+    row.className = "running";
+
+    const pip = document.createElement("span");
+    pip.className = "pip";
+
+    const what = document.createElement("span");
+    what.className = "what";
+    const b = document.createElement("b");
+    b.textContent = PLACES[n.region]?.name ?? n.region;
+    const sub = document.createElement("span");
+    const up = n.created_at ? Date.now() / 1000 - n.created_at : 0;
+    const plan = plans[n.region];
+    const cost = plan ? ` · $${((plan.usd_per_month / 730) * (up / 3600)).toFixed(2)} so far` : "";
+    sub.textContent = `${n.endpoint} · up ${duration(up)}${cost}`;
+    what.append(b, sub);
+
+    const manage = document.createElement("button");
+    manage.className = "btn quiet";
+    manage.textContent = "Manage";
+    manage.addEventListener("click", async () => { node = n; await enterReady(); });
+
+    const kill = document.createElement("button");
+    kill.className = "btn danger";
+    kill.textContent = "Destroy";
+    kill.addEventListener("click", async () => {
+      kill.disabled = true;
+      kill.textContent = "Destroying…";
+      try {
+        await invoke("destroy_node", { region: n.region });
+        if (node?.region === n.region) node = null;
+      } catch (err) {
+        $("region-msg").textContent = String(err);
+        $("region-msg").className = "msg err";
+      }
+      await paintRunning();
+      markRunningRegions();
+    });
+
+    row.append(pip, what, manage, kill);
+    wrap.append(row);
+  }
+  markRunningRegions();
+}
+
+/// Badge the picker so an occupied region cannot be walked into by accident.
+function markRunningRegions() {
+  const live = new Set(running.map((n) => n.region));
+  for (const btn of document.querySelectorAll(".region")) {
+    const id = btn.dataset.region;
+    let badge = btn.querySelector(".badge");
+    if (live.has(id)) {
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "badge";
+        btn.append(badge);
+      }
+      badge.textContent = "● Running";
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+  const sel = chosen && live.has(chosen);
+  $("go-connect").textContent = sel ? "Manage this server" : "Next";
+}
+
 function pick(id) {
   chosen = id;
   for (const b of document.querySelectorAll(".region")) {
     b.setAttribute("aria-pressed", String(b.dataset.region === id));
   }
   $("go-connect").disabled = false;
+  markRunningRegions();
   const p = plans[id];
   $("region-msg").textContent = p
     ? `${PLACES[id]?.name ?? id} · ${p.transfer_gb} GB of traffic included`
@@ -184,6 +267,9 @@ function mark(key, state) {
 
 $("go-connect").addEventListener("click", async () => {
   if (!chosen) return;
+  // Occupied region: go straight to it instead of attempting a create that AWS will refuse.
+  const existing = running.find((n) => n.region === chosen);
+  if (existing) { node = existing; await enterReady(); return; }
   go("s-progress");
   progGlobe.setTargets([chosen]);
   progGlobe.setFocus(chosen);
@@ -415,13 +501,11 @@ go("s-hero");
 await refreshProfiles();
 
 if (activeProfile) {
-  // Already set up. Look for a node that is already running before dropping them on the picker,
-  // so reopening the app lands where they left off rather than back at step one.
+  // Already set up. One sweep finds anything already running, so reopening lands where you left
+  // off instead of back at step one — and more importantly, never hides a server that is billing.
   await enterRegions();
-  for (const id of Object.keys(PLACES)) {
-    try {
-      const n = await invoke("node_status", { region: id });
-      if (n) { node = n; await enterReady(); break; }
-    } catch { /* a region that errors is simply not where the node is */ }
+  if (running.length === 1) {
+    node = running[0];
+    await enterReady();
   }
 }

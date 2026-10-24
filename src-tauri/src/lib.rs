@@ -103,6 +103,33 @@ async fn region_plan(region: String) -> Result<node::Plan, String> {
     node::plan_for(&aws_sdk_lightsail::Client::new(&config)).await
 }
 
+/// Every running server, across all offered regions, checked concurrently.
+///
+/// The credentials are read from the keychain **once** and reused for each region. Calling
+/// `active_config` per region would read it seven times, and on an unsigned build that is seven
+/// authorisation prompts in a row.
+#[tauri::command]
+async fn all_nodes() -> Result<Vec<node::Node>, String> {
+    let (key, secret) = creds::active_credentials()?;
+    let mut handles = Vec::new();
+    for (region, _, _) in REGIONS {
+        let (key, secret, region) = (key.clone(), secret.clone(), region.to_string());
+        handles.push(tokio::spawn(async move {
+            let cfg = creds::config_for(&key, &secret, &region).await;
+            node::find(&aws_sdk_lightsail::Client::new(&cfg), &region).await
+        }));
+    }
+    let mut found = Vec::new();
+    for h in handles {
+        // A region that errors is simply not where a server is; one unreachable region must not
+        // hide the others.
+        if let Ok(Some(n)) = h.await {
+            found.push(n);
+        }
+    }
+    Ok(found)
+}
+
 #[tauri::command]
 async fn node_status(region: String) -> Result<Option<node::Node>, String> {
     let config = creds::active_config(&region).await?;
@@ -215,6 +242,7 @@ pub fn run() {
             select_profile,
             remove_profile,
             region_plan,
+            all_nodes,
             node_status,
             create_node,
             destroy_node,
