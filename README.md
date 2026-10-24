@@ -187,4 +187,4 @@ Rust and Node. No Xcode required.
 
 ## Licence
 
-MIT © Bytelights Private Limited.
+MIT.

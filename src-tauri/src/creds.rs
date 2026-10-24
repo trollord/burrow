@@ -7,7 +7,7 @@
 use aws_credential_types::Credentials;
 use serde::Serialize;
 
-const SERVICE: &str = "co.bytelights.burrow";
+const SERVICE: &str = "io.github.trollord.burrow";
 const ACCOUNT: &str = "aws";
 
 /// What the UI needs to know about a stored credential. Deliberately contains no secret: the

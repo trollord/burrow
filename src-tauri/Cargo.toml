@@ -2,7 +2,7 @@
 name = "burrow"
 version = "0.1.0"
 description = "Your own WireGuard VPN, on your own cloud account"
-authors = ["Bytelights"]
+authors = ["the Burrow contributors"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
