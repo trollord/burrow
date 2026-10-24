@@ -10,7 +10,7 @@
     <!-- ── 0. hero ──────────────────────────────────────────────────── -->
     <section class="screen" id="s-hero">
       <div class="stage">
-        <svg id="globe" width="320" height="320" viewBox="-170 -170 340 340" aria-hidden="true"></svg>
+        <canvas id="globe" class="globe" width="340" height="340" aria-hidden="true"></canvas>
       </div>
       <div style="text-align:center">
         <h1>Appear somewhere else.</h1>
@@ -57,7 +57,17 @@
           </ol>
         </details>
 
+        <div id="saved" hidden>
+          <div class="group-title">Saved keys</div>
+          <div id="profile-list"></div>
+          <hr class="hr" />
+        </div>
+
         <form id="creds-form" autocomplete="off">
+          <label class="field">
+            <span>Name this key</span>
+            <input id="pname" type="text" placeholder="personal" spellcheck="false" required />
+          </label>
           <label class="field">
             <span>Access key ID</span>
             <input id="akid" type="text" placeholder="AKIA…" spellcheck="false" required />
@@ -67,7 +77,7 @@
             <input id="secret" type="password" placeholder="40 characters" spellcheck="false" required />
           </label>
           <div class="row">
-            <button type="submit" class="btn primary" id="test-conn">Test connection</button>
+            <button type="submit" class="btn primary" id="test-conn">Test and save</button>
             <button type="button" class="btn quiet" id="back-hero">Back</button>
             <span id="creds-msg" class="msg" role="status"></span>
           </div>
@@ -94,7 +104,7 @@
     <!-- ── 3. connecting ────────────────────────────────────────────── -->
     <section class="screen" id="s-progress">
       <div class="stage">
-        <svg id="globe2" width="300" height="300" viewBox="-170 -170 340 340" aria-hidden="true"></svg>
+        <canvas id="globe2" class="globe sm" width="280" height="280" aria-hidden="true"></canvas>
       </div>
       <h1 id="prog-title" style="text-align:center">Digging your burrow</h1>
       <p class="lede" id="prog-sub" style="text-align:center">This takes about two minutes.</p>
@@ -140,6 +150,34 @@
             <div class="n" id="c-transfer">—</div>
           </div>
         </div>
+      </div>
+
+      <div class="panel" id="usage-panel" hidden style="margin-bottom:12px">
+        <h2>Data</h2>
+        <p class="tiny muted" style="margin:2px 0 14px">
+          Measured on your tunnel interface, so it counts this device only.
+        </p>
+        <div class="cost">
+          <div>
+            <div class="k">This session</div>
+            <div class="v" id="u-live">—</div>
+            <div class="n" id="u-live-time">not connected</div>
+          </div>
+          <div>
+            <div class="k">Last 30 days</div>
+            <div class="v" id="u-month">—</div>
+            <div class="n" id="u-month-n">—</div>
+          </div>
+          <div>
+            <div class="k">Allowance left</div>
+            <div class="v" id="u-left">—</div>
+            <div class="n" id="u-left-n">—</div>
+          </div>
+        </div>
+        <details class="help" style="margin:14px 0 0">
+          <summary>Recent sessions</summary>
+          <table class="sessions" id="session-table"></table>
+        </details>
       </div>
 
       <div class="panel">

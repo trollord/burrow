@@ -110,7 +110,14 @@ this would cost more than the subscription it replaces.
 backend, no account to create, nothing of yours on our infrastructure — because there isn't any.
 It's also the only honest way to sell "your own VPN": we couldn't log your traffic if we wanted to.
 
-**Credentials live in the OS keychain**, never in a config file.
+**Credentials live in the OS keychain**, never in a config file. You can save **several named
+keys** — "personal", "work" — and switch between them; the secret goes in the keychain while the
+name, account and access key id go in a plain index. That split is deliberate: listing your keys
+never touches the keychain, so opening the app does not throw an authorisation prompt at you.
+
+**Sessions are recorded locally** — where, how long, and how much data moved. Byte counts come
+from the tunnel interface's own counters via `netstat`, which needs no privileges; `wg show`
+would have meant asking for a password to read a statistic.
 
 **Keys are generated in-process** with `x25519-dalek` rather than shelling to `wg genkey`, so no
 private key ever appears in the process table. A unit test asserts the public key matches what
@@ -189,8 +196,12 @@ The `scripts/` work anywhere bash, the AWS CLI and `wireguard-tools` do, which i
 |---|---|
 | `CLAUDE.md` | Driving this with an agent, and every failure mode hit so far |
 | `src/` | Frontend — plain HTML, CSS and JS, no framework |
-| `src/globe.js` | The hairline globe and the travelling-light animation |
-| `src-tauri/src/creds.rs` | Keychain storage and credential validation |
+| `src/globe.js` | The globe: orthographic projection, coastlines, travelling light |
+| `src/world.js` | Vendored Natural Earth 110m geometry (public domain) |
+| `tools/build-world.py` | Regenerates `world.js` |
+| `src-tauri/src/sessions.rs` | Session history and data accounting |
+| `src-tauri/src/creds.rs` | Named profiles: keychain secrets, plaintext index |
+| `src-tauri/src/paths.rs` | Where files live, and the JSON helpers |
 | `src-tauri/src/keys.rs` | WireGuard keypairs + the `wg pubkey` compatibility test |
 | `src-tauri/src/node.rs` | Lightsail provisioning and teardown |
 | `src-tauri/src/tunnel.rs` | Privileged connect, and the "am I really tunnelled" check |

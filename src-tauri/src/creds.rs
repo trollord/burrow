@@ -1,65 +1,131 @@
-//! AWS credential storage and validation.
+//! Named AWS profiles.
 //!
-//! Credentials go in the OS keychain, never in a config file. Burrow is asking people to paste
-//! keys that can spend money on their account, so the one thing it must not do is leave them in
-//! plaintext somewhere a backup or a stray `cat` will find.
+//! Secrets go in the OS keychain; everything else — the name you gave it, the access key id, the
+//! account it belongs to — goes in a plain JSON index beside the configs. The split matters for
+//! one practical reason: **listing your profiles never touches the keychain**, so opening the app
+//! does not trigger an authorisation prompt. Only an action that actually calls AWS does.
+//!
+//! An access key id is not a secret (it appears in logs and ARNs), so holding it in the index is
+//! what lets the UI show you which key is which without unlocking anything.
 
+use crate::paths::{config_dir, now, read_json, write_json};
 use aws_credential_types::Credentials;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 const SERVICE: &str = "io.github.trollord.burrow";
-const ACCOUNT: &str = "aws";
 
-/// What the UI needs to know about a stored credential. Deliberately contains no secret: the
-/// access key id is shown so people can tell which key is in use, the secret never leaves here.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Profile {
+    /// Whatever the user called it: "personal", "work", "client acme".
+    pub name: String,
+    pub access_key_id: String,
+    pub account: String,
+    pub arn: String,
+    pub added_at: i64,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct Store {
+    pub active: Option<String>,
+    pub profiles: Vec<Profile>,
+}
+
+fn index_path() -> Result<PathBuf, String> {
+    Ok(config_dir()?.join("profiles.json"))
+}
+
+fn entry(name: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SERVICE, name).map_err(|e| format!("keychain unavailable: {e}"))
+}
+
+/// Every saved profile, and which is selected. Reads one small JSON file; no keychain, no prompt.
+pub fn list() -> Store {
+    index_path().map(|p| read_json(&p)).unwrap_or_default()
+}
+
+pub fn active() -> Option<Profile> {
+    let store = list();
+    let name = store.active.as_ref()?;
+    store.profiles.iter().find(|p| &p.name == name).cloned()
+}
+
+/// Access key and secret for the active profile. This is the call that may prompt.
+pub fn active_credentials() -> Result<(String, String), String> {
+    let p = active().ok_or("No AWS profile selected.")?;
+    let secret = entry(&p.name)?
+        .get_password()
+        .map_err(|_| format!("The key for \"{}\" is missing from the keychain. Add it again.", p.name))?;
+    Ok((p.access_key_id, secret))
+}
+
+/// Verify a key, then save it under a name. Verification happens first so a bad key is never
+/// stored and never has to be cleaned up.
+pub async fn add(name: &str, access_key_id: &str, secret: &str, region: &str) -> Result<Profile, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give this key a name so you can tell it apart later.".into());
+    }
+    let identity = verify(access_key_id, secret, region).await?;
+    if !identity.lightsail_ok {
+        return Err(
+            "Those credentials work, but they cannot use Lightsail. Attach the \
+             AmazonLightsailFullAccess policy to this IAM user and try again."
+                .into(),
+        );
+    }
+
+    entry(name)?
+        .set_password(secret)
+        .map_err(|e| format!("could not write to the keychain: {e}"))?;
+
+    let mut store = list();
+    let profile = Profile {
+        name: name.to_string(),
+        access_key_id: access_key_id.to_string(),
+        account: identity.account,
+        arn: identity.arn,
+        added_at: now(),
+    };
+    // Re-adding under an existing name replaces it rather than making a duplicate, which is what
+    // someone rotating a key expects to happen.
+    store.profiles.retain(|p| p.name != profile.name);
+    store.profiles.push(profile.clone());
+    store.active = Some(profile.name.clone());
+    write_json(&index_path()?, &store)?;
+    Ok(profile)
+}
+
+pub fn select(name: &str) -> Result<(), String> {
+    let mut store = list();
+    if !store.profiles.iter().any(|p| p.name == name) {
+        return Err(format!("No profile called \"{name}\"."));
+    }
+    store.active = Some(name.to_string());
+    write_json(&index_path()?, &store)
+}
+
+pub fn remove(name: &str) -> Result<(), String> {
+    // Drop the keychain item too, or the secret outlives the profile with nothing pointing at it.
+    if let Ok(e) = entry(name) {
+        let _ = e.delete_credential();
+    }
+    let mut store = list();
+    store.profiles.retain(|p| p.name != name);
+    if store.active.as_deref() == Some(name) {
+        store.active = store.profiles.first().map(|p| p.name.clone());
+    }
+    write_json(&index_path()?, &store)
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Identity {
     pub account: String,
     pub arn: String,
-    pub access_key_id: String,
     pub lightsail_ok: bool,
 }
 
-fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("keychain unavailable: {e}"))
-}
-
-/// Stored as "AKIA...:secret". The access key id is not secret, so a single keychain item holding
-/// both is simpler than two items that could drift out of sync.
-pub fn save(access_key_id: &str, secret: &str) -> Result<(), String> {
-    entry()?
-        .set_password(&format!("{access_key_id}:{secret}"))
-        .map_err(|e| format!("could not write to the keychain: {e}"))
-}
-
-pub fn load() -> Result<Option<(String, String)>, String> {
-    match entry()?.get_password() {
-        Ok(v) => match v.split_once(':') {
-            Some((id, secret)) if !id.is_empty() && !secret.is_empty() => {
-                Ok(Some((id.to_string(), secret.to_string())))
-            }
-            // A malformed item is treated as absent rather than as an error: the user can simply
-            // re-enter their key instead of being stuck behind a message they cannot act on.
-            _ => Ok(None),
-        },
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("could not read the keychain: {e}")),
-    }
-}
-
-pub fn clear() -> Result<(), String> {
-    match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("could not clear the keychain: {e}")),
-    }
-}
-
-/// Turn a key pair into an SDK config for a given region.
-pub async fn config_for(
-    access_key_id: &str,
-    secret: &str,
-    region: &str,
-) -> aws_config::SdkConfig {
+pub async fn config_for(access_key_id: &str, secret: &str, region: &str) -> aws_config::SdkConfig {
     let creds = Credentials::new(access_key_id, secret, None, None, "burrow");
     aws_config::defaults(aws_config::BehaviorVersion::latest())
         .region(aws_config::Region::new(region.to_string()))
@@ -68,12 +134,17 @@ pub async fn config_for(
         .await
 }
 
-/// Prove the keys work AND that they can actually drive Lightsail.
+/// SDK config for whichever profile is active.
+pub async fn active_config(region: &str) -> Result<aws_config::SdkConfig, String> {
+    let (id, secret) = active_credentials()?;
+    Ok(config_for(&id, &secret, region).await)
+}
+
+/// Prove a key works AND that it can drive Lightsail.
 ///
 /// Both halves matter. STS succeeding only says the key is real; plenty of IAM users authenticate
-/// fine and then fail at the first Lightsail call because nobody attached the policy. Finding that
-/// out during onboarding, with a message naming the exact policy, beats finding out halfway
-/// through provisioning.
+/// and then fail at the first Lightsail call because nobody attached the policy. Catching that
+/// during setup, with a message naming the policy, beats failing mid-provision.
 pub async fn verify(access_key_id: &str, secret: &str, region: &str) -> Result<Identity, String> {
     let config = config_for(access_key_id, secret, region).await;
 
@@ -84,8 +155,8 @@ pub async fn verify(access_key_id: &str, secret: &str, region: &str) -> Result<I
         .map_err(|e| {
             let msg = format!("{}", aws_sdk_sts::error::DisplayErrorContext(&e));
             if msg.contains("InvalidClientTokenId") || msg.contains("SignatureDoesNotMatch") {
-                "Those credentials were rejected by AWS. Check for a missing character \
-                 — secrets are 40 characters and easy to truncate when copying."
+                "AWS rejected those credentials. Check for a missing character — secrets are \
+                 40 characters and easy to truncate when copying."
                     .to_string()
             } else {
                 format!("AWS rejected the credentials: {msg}")
@@ -101,7 +172,6 @@ pub async fn verify(access_key_id: &str, secret: &str, region: &str) -> Result<I
     Ok(Identity {
         account: who.account().unwrap_or_default().to_string(),
         arn: who.arn().unwrap_or_default().to_string(),
-        access_key_id: access_key_id.to_string(),
         lightsail_ok,
     })
 }

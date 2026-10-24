@@ -161,3 +161,22 @@ cd src-tauri && cargo test --lib
 Rust and Node; no Xcode. `src-tauri/src/` is `creds.rs` (keychain + validation), `keys.rs`
 (WireGuard keypairs, with a test asserting they match `wg pubkey`), `node.rs` (Lightsail),
 `tunnel.rs` (privileged connect).
+
+---
+
+## The globe
+
+`src/world.js` is vendored Natural Earth 1:110m country geometry, public domain, regenerated with
+`python3 tools/build-world.py`. It is committed rather than fetched because Burrow must work
+offline, and an app that phones out for a map on launch is a poor look for something selling
+privacy.
+
+`src/globe.js` draws it on a canvas with an orthographic projection. Two things are load-bearing:
+
+- **No trigonometry per point per frame.** Latitude and longitude never change, so
+  `cos(lat)·sin(lon)`, `cos(lat)·cos(lon)` and `sin(lat)` are precomputed into flat arrays at
+  load. Rotation is then the angle-addition identity — four multiplies per point. With ~10,000
+  points at 60fps, calling `Math.sin` per point would not hold frame rate.
+- **Points behind the horizon are projected onto the limb, not dropped.** Dropping them breaks
+  the ring and tears the fill on any country spanning the edge — Russia and Antarctica worst.
+  Pushing them to the rim keeps every ring closed and the circular clip hides the join.

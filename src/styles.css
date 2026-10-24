@@ -22,6 +22,15 @@
   --bad: #c62b1f;
 
   --ease: cubic-bezier(.22, .61, .36, 1);
+
+  /* The globe reads its palette from here so the canvas stays in step with the rest of the UI. */
+  --globe-ocean:  #ffffff;
+  --globe-land:   #dfeaff;
+  --globe-border: #9dbff0;   /* country outlines — a hairline, deliberately low contrast */
+  --globe-grid:   #eef4fd;
+  --globe-limb:   #bcd6fb;
+  --globe-accent: #1d5fd8;
+  --globe-home:   #06142e;
 }
 
 * { box-sizing: border-box; }
@@ -76,21 +85,15 @@ code {
 /* ── globe ────────────────────────────────────────────────────────────── */
 
 .stage { display: grid; place-items: center; margin-bottom: 22px; }
-#globe { display: block; overflow: visible; }
-.graticule { fill: none; stroke: var(--hair); stroke-width: 1; }
-.limb      { fill: none; stroke: var(--blue-300); stroke-width: 1; }
-.land      { fill: var(--blue-100); stroke: none; }
-.node      { fill: var(--blue-600); }
-.node.home { fill: var(--blue-950); }
-.node-ring { fill: none; stroke: var(--blue-500); stroke-width: 1; opacity: .9; }
-.arc       { fill: none; stroke: var(--blue-500); stroke-width: 1; opacity: .35; }
-.spark     { fill: none; stroke: var(--blue-600); stroke-width: 1.6; stroke-linecap: round; }
-
-@keyframes ping {
-  from { r: 4; opacity: .85; }
-  to   { r: 17; opacity: 0; }
+.globe {
+  display: block;
+  width: 340px; height: 340px;
+  /* The canvas is sized in CSS and scaled by devicePixelRatio internally, so coastlines stay
+     crisp on a Retina display instead of being drawn at half resolution and upscaled. */
+  filter: drop-shadow(0 6px 22px rgba(29, 95, 216, .13));
 }
-.ping { animation: ping 2.4s var(--ease) infinite; }
+.globe.sm { width: 280px; height: 280px; }
+
 
 /* ── buttons ──────────────────────────────────────────────────────────── */
 
@@ -215,3 +218,34 @@ details.help li { margin: 5px 0; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
+
+/* ── saved keys + session table ────────────────────────────────────────── */
+
+.profile {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--hair); border-radius: 10px;
+  margin-bottom: 7px; cursor: pointer; background: var(--panel);
+  transition: border-color .18s, background .18s;
+  width: 100%; text-align: left; font: inherit; color: var(--ink);
+}
+.profile:hover { border-color: var(--blue-300); }
+.profile[aria-pressed="true"] { border-color: var(--blue-600); background: var(--blue-50); }
+.profile .tick { width: 14px; flex: none; color: var(--blue-600); }
+.profile .who { flex: 1; min-width: 0; }
+.profile .who b { display: block; font-weight: 600; }
+.profile .who span {
+  display: block; font-size: 12px; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.profile .drop {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  padding: 2px 6px; border-radius: 6px; font-size: 16px; line-height: 1;
+}
+.profile .drop:hover { color: var(--bad); background: var(--blue-50); }
+
+table.sessions { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+table.sessions td { padding: 6px 0; border-bottom: 1px solid var(--hair-soft); color: var(--muted); }
+table.sessions td:first-child { color: var(--ink); }
+table.sessions td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+table.sessions tr:last-child td { border-bottom: 0; }

@@ -1,14 +1,16 @@
 mod creds;
 mod keys;
 mod node;
+mod paths;
+mod sessions;
 mod tunnel;
 
+use paths::config_file;
 use serde::Serialize;
-use std::path::PathBuf;
 
-/// Locations offered in the picker. Lightsail has 19 regions; these are the ones people actually
-/// want for a VPN. Adding more is a line each — bundle and availability zone are both discovered
-/// per region at provision time, so nothing else needs touching.
+/// Locations offered in the picker. Lightsail has 19 regions; these are the ones people want for
+/// a VPN. Adding more is a line each — instance size and availability zone are discovered per
+/// region at provision time, so nothing else needs touching.
 const REGIONS: &[(&str, &str, &str)] = &[
     ("us-east-1", "Virginia", "United States"),
     ("us-east-2", "Ohio", "United States"),
@@ -36,77 +38,41 @@ fn regions() -> Vec<Region> {
         .collect()
 }
 
-/// What this location costs, read live from AWS.
-///
-/// Prices and especially transfer allowances are not uniform: Sydney charges the same $5 for half
-/// the data as Virginia, and the bundle is called something different there. Showing the real
-/// numbers before someone commits is worth the extra round trip.
-#[tauri::command]
-async fn region_plan(region: String) -> Result<node::Plan, String> {
-    let (id, secret) = creds::load()?.ok_or("no credentials saved")?;
-    let config = creds::config_for(&id, &secret, &region).await;
-    node::plan_for(&aws_sdk_lightsail::Client::new(&config)).await
-}
-
-/// Configs live outside the app bundle and outside any synced folder.
-///
-/// On macOS this also dodges TCC: ~/Desktop, ~/Documents and ~/Downloads are protected, and a root
-/// process raised to run wg-quick gets "Operation not permitted" reading a config in any of them —
-/// a failure that looks like a WireGuard bug and is not.
-fn config_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "no HOME set".to_string())?;
-    let dir = PathBuf::from(home).join(".config").join("burrow");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {dir:?}: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
-    Ok(dir)
-}
-
-fn config_path(region: &str) -> Result<PathBuf, String> {
-    Ok(config_dir()?.join(format!("{region}.conf")))
-}
+// ── profiles ──────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct Setup {
-    has_credentials: bool,
-    identity: Option<creds::Identity>,
+struct Startup {
+    profiles: Vec<creds::Profile>,
+    active: Option<String>,
     wireguard_installed: bool,
 }
 
-/// What the UI needs on launch to decide which screen to show.
+/// What the UI needs on launch.
+///
+/// Deliberately reads only the profile index, never the keychain: touching the keychain here is
+/// what threw an authorisation dialog in your face before the app had even drawn. Nothing needs
+/// a secret until you ask it to do something with AWS.
 #[tauri::command]
-async fn setup_state() -> Result<Setup, String> {
-    let stored = creds::load()?;
-    let wireguard_installed = which_wg().is_some();
-    match stored {
-        None => Ok(Setup {
-            has_credentials: false,
-            identity: None,
-            wireguard_installed,
-        }),
-        Some((id, secret)) => {
-            // Verify rather than trust: a key valid last week may have been revoked since, and
-            // discovering that at connect time is a worse experience than at launch.
-            let identity = creds::verify(&id, &secret, REGIONS[0].0).await.ok();
-            Ok(Setup {
-                has_credentials: true,
-                identity,
-                wireguard_installed,
-            })
-        }
+fn startup() -> Startup {
+    let store = creds::list();
+    Startup {
+        profiles: store.profiles,
+        active: store.active,
+        wireguard_installed: tunnel::wg_quick().is_some(),
     }
 }
 
 #[tauri::command]
-async fn save_credentials(access_key_id: String, secret: String) -> Result<creds::Identity, String> {
+async fn add_profile(
+    name: String,
+    access_key_id: String,
+    secret: String,
+) -> Result<creds::Profile, String> {
     let access_key_id = access_key_id.trim().to_string();
     let secret = secret.trim().to_string();
 
     // Catch the two mistakes people actually make — pasting the wrong field, and truncating the
-    // secret — with a message that says which, rather than letting AWS answer "invalid token".
+    // secret — rather than letting AWS answer with "invalid token".
     if !access_key_id.starts_with("AKIA") && !access_key_id.starts_with("ASIA") {
         return Err("That does not look like an Access key ID — they begin with AKIA.".into());
     }
@@ -116,37 +82,39 @@ async fn save_credentials(access_key_id: String, secret: String) -> Result<creds
             secret.len()
         ));
     }
-
-    let identity = creds::verify(&access_key_id, &secret, REGIONS[0].0).await?;
-    if !identity.lightsail_ok {
-        return Err(
-            "Those credentials work, but they cannot use Lightsail. Attach the \
-             AmazonLightsailFullAccess policy to this IAM user and try again."
-                .into(),
-        );
-    }
-    creds::save(&access_key_id, &secret)?;
-    Ok(identity)
+    creds::add(&name, &access_key_id, &secret, REGIONS[0].0).await
 }
 
 #[tauri::command]
-fn forget_credentials() -> Result<(), String> {
-    creds::clear()
+fn select_profile(name: String) -> Result<(), String> {
+    creds::select(&name)
+}
+
+#[tauri::command]
+fn remove_profile(name: String) -> Result<(), String> {
+    creds::remove(&name)
+}
+
+// ── servers ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn region_plan(region: String) -> Result<node::Plan, String> {
+    let config = creds::active_config(&region).await?;
+    node::plan_for(&aws_sdk_lightsail::Client::new(&config)).await
 }
 
 #[tauri::command]
 async fn node_status(region: String) -> Result<Option<node::Node>, String> {
-    let (id, secret) = creds::load()?.ok_or("no credentials saved")?;
-    let config = creds::config_for(&id, &secret, &region).await;
+    let config = creds::active_config(&region).await?;
     Ok(node::find(&aws_sdk_lightsail::Client::new(&config), &region).await)
 }
 
 #[tauri::command]
 async fn create_node(region: String) -> Result<node::Node, String> {
-    let (id, secret) = creds::load()?.ok_or("no credentials saved")?;
+    let (id, secret) = creds::active_credentials()?;
     let result = node::provision(&id, &secret, &region, DEFAULT_DNS).await?;
 
-    let path = config_path(&region)?;
+    let path = config_file(&region)?;
     std::fs::write(&path, &result.config).map_err(|e| format!("could not write the config: {e}"))?;
     #[cfg(unix)]
     {
@@ -159,53 +127,47 @@ async fn create_node(region: String) -> Result<node::Node, String> {
 
 #[tauri::command]
 async fn destroy_node(region: String) -> Result<Vec<String>, String> {
-    let (id, secret) = creds::load()?.ok_or("no credentials saved")?;
+    let (id, secret) = creds::active_credentials()?;
     let steps = node::destroy(&id, &secret, &region).await?;
-    let _ = std::fs::remove_file(config_path(&region)?);
+    let _ = std::fs::remove_file(config_file(&region)?);
     Ok(steps)
 }
 
-fn which_wg() -> Option<String> {
-    tunnel::wg_quick().map(|s| s.to_string())
-}
+// ── tunnel ────────────────────────────────────────────────────────────────
 
-#[tauri::command]
-fn config_file_path(region: String) -> Result<String, String> {
-    Ok(config_path(&region)?.to_string_lossy().to_string())
-}
-
-/// Raise the tunnel. Prompts for admin once, via the system dialog.
 #[tauri::command]
 async fn connect(region: String) -> Result<tunnel::Status, String> {
-    let path = config_path(&region)?;
+    let path = config_file(&region)?;
     if !path.exists() {
         return Err("No configuration for this location — create the server first.".into());
     }
     tunnel::up(&path)?;
 
-    // Coming back from wg-quick only means the interface was created. Whether traffic actually
-    // leaves through the exit node is a different question, and the one worth answering: poll
-    // until the public address matches, rather than claiming success on an interface that exists
-    // but never handshook.
+    // Returning from wg-quick only means an interface was created. Whether traffic actually
+    // leaves through the exit node is the question worth answering, so poll until the public
+    // address matches rather than declaring success on an interface that never handshook.
     let endpoint = node_endpoint(&region).await.unwrap_or_default();
     for _ in 0..10 {
         let st = tunnel::status(&endpoint);
         if st.tunnelled {
+            let _ = sessions::begin(&region, &endpoint);
             return Ok(st);
         }
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
     }
     Err("The tunnel came up but traffic is not going through it yet. \
-         Give the server another moment, then try again.".into())
+         Give the server another moment, then try again."
+        .into())
 }
 
 #[tauri::command]
 async fn disconnect(region: String) -> Result<tunnel::Status, String> {
-    tunnel::down(&config_path(&region)?)?;
+    // Read the counters BEFORE tearing the interface down — they vanish with it.
+    let _ = sessions::end();
+    tunnel::down(&config_file(&region)?)?;
     Ok(tunnel::status(""))
 }
 
-/// Current tunnel state, cheap enough to poll from the UI.
 #[tauri::command]
 async fn tunnel_status(region: String) -> Result<tunnel::Status, String> {
     let endpoint = node_endpoint(&region).await.unwrap_or_default();
@@ -213,11 +175,33 @@ async fn tunnel_status(region: String) -> Result<tunnel::Status, String> {
 }
 
 async fn node_endpoint(region: &str) -> Option<String> {
-    let (id, secret) = creds::load().ok()??;
-    let config = creds::config_for(&id, &secret, region).await;
+    let config = creds::active_config(region).await.ok()?;
     node::find(&aws_sdk_lightsail::Client::new(&config), region)
         .await
         .map(|n| n.endpoint)
+}
+
+// ── sessions ──────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct Usage {
+    live: Option<sessions::Session>,
+    recent: Vec<sessions::Session>,
+    month: sessions::Totals,
+}
+
+/// Live usage plus history. Cheap — two small file reads and one `netstat`.
+#[tauri::command]
+fn usage() -> Usage {
+    let live = sessions::sample().ok().flatten();
+    // Thirty days rather than a calendar month: the Lightsail allowance accrues against the
+    // instance's own billing cycle, which does not begin on the 1st.
+    let cutoff = paths::now() - 30 * 24 * 3600;
+    Usage {
+        live,
+        recent: sessions::history(20),
+        month: sessions::totals_since(cutoff),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -226,17 +210,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             regions,
-            setup_state,
-            save_credentials,
-            forget_credentials,
+            startup,
+            add_profile,
+            select_profile,
+            remove_profile,
             region_plan,
             node_status,
             create_node,
             destroy_node,
-            config_file_path,
             connect,
             disconnect,
             tunnel_status,
+            usage,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

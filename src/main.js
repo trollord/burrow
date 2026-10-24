@@ -9,9 +9,11 @@ const $ = (id) => document.getElementById(id);
 const show = (el, on) => { el.hidden = !on; };
 
 let wgInstalled = false;
+let profiles = [];       // saved AWS keys, names only — no secrets ever reach the frontend
 let chosen = null;       // region id selected on screen 2
 let plans = {};          // region id -> { usd_per_month, transfer_gb, bundle_id }
 let node = null;         // the live node, once there is one
+let activeProfile = null;
 let costTimer = 0;
 
 // ── screens ───────────────────────────────────────────────────────────────
@@ -35,6 +37,54 @@ $("back-creds").addEventListener("click", () => go("s-creds"));
 
 // ── 1. credentials ────────────────────────────────────────────────────────
 
+function paintProfiles() {
+  const wrap = $("profile-list");
+  show($("saved"), profiles.length > 0);
+  wrap.replaceChildren();
+  for (const p of profiles) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "profile";
+    row.setAttribute("aria-pressed", String(p.name === activeProfile));
+    const tick = document.createElement("span");
+    tick.className = "tick";
+    tick.textContent = p.name === activeProfile ? "✓" : "";
+    const who = document.createElement("span");
+    who.className = "who";
+    const b = document.createElement("b");
+    b.textContent = p.name;
+    const sub = document.createElement("span");
+    // Account id and key id, never the secret — the frontend never sees one.
+    sub.textContent = `${p.account} · ${p.access_key_id}`;
+    who.append(b, sub);
+    const drop = document.createElement("span");
+    drop.className = "drop";
+    drop.textContent = "×";
+    drop.title = `Forget ${p.name}`;
+    drop.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await invoke("remove_profile", { name: p.name });
+      await refreshProfiles();
+    });
+    row.append(tick, who, drop);
+    row.addEventListener("click", async () => {
+      await invoke("select_profile", { name: p.name });
+      activeProfile = p.name;
+      paintProfiles();
+      await enterRegions();
+    });
+    wrap.append(row);
+  }
+}
+
+async function refreshProfiles() {
+  const st = await invoke("startup");
+  profiles = st.profiles;
+  activeProfile = st.active;
+  wgInstalled = st.wireguard_installed;
+  paintProfiles();
+}
+
 $("creds-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const btn = $("test-conn"), msg = $("creds-msg");
@@ -42,13 +92,17 @@ $("creds-form").addEventListener("submit", async (e) => {
   msg.textContent = "Asking AWS…";
   msg.className = "msg muted";
   try {
-    await invoke("save_credentials", {
+    const p = await invoke("add_profile", {
+      name: $("pname").value,
       accessKeyId: $("akid").value,
       secret: $("secret").value,
     });
-    msg.textContent = "Connected.";
+    msg.textContent = `Saved as "${p.name}".`;
     msg.className = "msg ok";
-    $("secret").value = "";   // don't leave the secret in the DOM once it's in the keychain
+    // Clear both: the secret so it does not linger in the DOM, the rest so the form is ready
+    // for another key rather than looking like it failed to submit.
+    $("secret").value = ""; $("akid").value = ""; $("pname").value = "";
+    await refreshProfiles();
     await enterRegions();
   } catch (err) {
     msg.textContent = String(err);
@@ -171,6 +225,79 @@ $("prog-back").addEventListener("click", () => go("s-region"));
 
 const money = (n) => `$${n.toFixed(2)}`;
 
+function bytes(n) {
+  if (!n) return "0 MB";
+  const mb = n / 1048576;
+  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function duration(secs) {
+  if (secs < 60) return `${Math.round(secs)}s`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  const h = Math.floor(secs / 3600), m = Math.round((secs % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+let usageTimer = 0;
+
+async function paintUsage() {
+  let u;
+  try { u = await invoke("usage"); } catch { return; }
+  show($("usage-panel"), true);
+
+  const live = u.live && !u.live.ended_at ? u.live : null;
+  $("u-live").textContent = live ? bytes(live.rx_bytes + live.tx_bytes) : "—";
+  $("u-live-time").textContent = live
+    ? `${duration(Date.now() / 1000 - live.started_at)} connected`
+    : "not connected";
+
+  $("u-month").textContent = bytes(u.month.bytes);
+  $("u-month-n").textContent =
+    `${u.month.sessions} session${u.month.sessions === 1 ? "" : "s"} · ${duration(u.month.seconds)}`;
+
+  // The allowance belongs to the instance, and AWS meters it at the server. This counts only
+  // what crossed this device's tunnel, so it is a floor, not a reconciliation -- say so rather
+  // than implying it matches the bill.
+  const plan = node ? plans[node.region] : null;
+  if (plan) {
+    const usedGb = u.month.bytes / 1073741824;
+    const left = Math.max(0, plan.transfer_gb - usedGb);
+    $("u-left").textContent = `${left > 100 ? Math.round(left) : left.toFixed(1)} GB`;
+    $("u-left-n").textContent = `of ${plan.transfer_gb} GB · estimate`;
+  } else {
+    $("u-left").textContent = "—";
+    $("u-left-n").textContent = "";
+  }
+
+  const tbl = $("session-table");
+  tbl.replaceChildren();
+  for (const s of u.recent) {
+    const tr = document.createElement("tr");
+    const when = new Date(s.started_at * 1000);
+    const secs = (s.ended_at ?? Date.now() / 1000) - s.started_at;
+    for (const text of [
+      PLACES[s.region]?.name ?? s.region,
+      when.toLocaleDateString(undefined, { day: "numeric", month: "short" }) +
+        " " + when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+      duration(secs),
+      bytes(s.rx_bytes + s.tx_bytes),
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
+    tbl.append(tr);
+  }
+  if (!u.recent.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.textContent = "No sessions yet.";
+    tr.append(td);
+    tbl.append(tr);
+  }
+}
+
 function paintCost() {
   if (!node) return;
   const plan = plans[node.region];
@@ -202,8 +329,12 @@ async function enterReady() {
     try { plans[region] = await invoke("region_plan", { region }); } catch { /* cost stays blank */ }
   }
   paintCost();
+  paintUsage();
   clearInterval(costTimer);
+  clearInterval(usageTimer);
   costTimer = setInterval(paintCost, 10000);
+  // Faster than cost because bytes move while you watch; still cheap (two file reads + netstat).
+  usageTimer = setInterval(paintUsage, 4000);
 }
 
 // The indicator answers the only question that matters — is my traffic actually leaving through
@@ -243,6 +374,7 @@ $("connect").addEventListener("click", async () => {
       : await invoke("connect", { region: node.region });
     paintTunnel(st);
     msg.textContent = "";
+    paintUsage();
   } catch (err) {
     // Dismissing the password dialog is a decision, not a fault; say so plainly.
     msg.textContent = String(err) === "cancelled" ? "Cancelled." : String(err);
@@ -280,10 +412,9 @@ $("destroy").addEventListener("click", async () => {
 heroGlobe.setTargets(Object.keys(PLACES));
 go("s-hero");
 
-const state = await invoke("setup_state");
-wgInstalled = state.wireguard_installed;
+await refreshProfiles();
 
-if (state.has_credentials && state.identity) {
+if (activeProfile) {
   // Already set up. Look for a node that is already running before dropping them on the picker,
   // so reopening the app lands where they left off rather than back at step one.
   await enterRegions();
