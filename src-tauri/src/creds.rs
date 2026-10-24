@@ -11,9 +11,42 @@
 use crate::paths::{config_dir, now, read_json, write_json};
 use aws_credential_types::Credentials;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 const SERVICE: &str = "io.github.trollord.burrow";
+
+/// Secrets already read this run, by profile name.
+///
+/// Without this the keychain is read once per AWS call — and the location screen alone makes
+/// seven, one per region, which macOS presents as seven authorisation prompts in a row. One read
+/// per profile per run is both the correct number and the difference between a usable app and an
+/// unusable one.
+///
+/// The secret sits in process memory for the lifetime of the app. That is unavoidable: the AWS
+/// SDK needs it in memory to sign every request anyway, so caching changes how long it is held,
+/// not whether it is held.
+fn cache() -> &'static Mutex<HashMap<String, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached(name: &str) -> Option<String> {
+    cache().lock().ok()?.get(name).cloned()
+}
+
+fn remember(name: &str, secret: &str) {
+    if let Ok(mut c) = cache().lock() {
+        c.insert(name.to_string(), secret.to_string());
+    }
+}
+
+fn forget(name: &str) {
+    if let Ok(mut c) = cache().lock() {
+        c.remove(name);
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Profile {
@@ -53,9 +86,13 @@ pub fn active() -> Option<Profile> {
 /// Access key and secret for the active profile. This is the call that may prompt.
 pub fn active_credentials() -> Result<(String, String), String> {
     let p = active().ok_or("No AWS profile selected.")?;
+    if let Some(secret) = cached(&p.name) {
+        return Ok((p.access_key_id, secret));
+    }
     let secret = entry(&p.name)?
         .get_password()
         .map_err(|_| format!("The key for \"{}\" is missing from the keychain. Add it again.", p.name))?;
+    remember(&p.name, &secret);
     Ok((p.access_key_id, secret))
 }
 
@@ -78,6 +115,9 @@ pub async fn add(name: &str, access_key_id: &str, secret: &str, region: &str) ->
     entry(name)?
         .set_password(secret)
         .map_err(|e| format!("could not write to the keychain: {e}"))?;
+    // Already in hand, so seed the cache: adding a key should never be followed by a prompt to
+    // read back the very thing just written.
+    remember(name, secret);
 
     let mut store = list();
     let profile = Profile {
@@ -106,6 +146,7 @@ pub fn select(name: &str) -> Result<(), String> {
 }
 
 pub fn remove(name: &str) -> Result<(), String> {
+    forget(name);
     // Drop the keychain item too, or the secret outlives the profile with nothing pointing at it.
     if let Ok(e) = entry(name) {
         let _ = e.delete_credential();

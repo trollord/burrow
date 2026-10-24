@@ -193,3 +193,55 @@ privacy.
   once — the globe looked correct facing Africa and inverted into a blue disc with white
   continents once it turned toward the Pacific, because far-side rings collapse onto the limb and
   pile into overlapping slivers. Per-ring fills just paint over each other and cannot invert.
+
+---
+
+## Building and signing on macOS
+
+**Never build inside an iCloud-synced folder.** This project lives under `~/Desktop`, which iCloud
+Drive syncs, and the file provider stamps `com.apple.FinderInfo` onto the app bundle within
+seconds of it being written. `codesign` then refuses it:
+
+```
+resource fork, Finder information, or similar detritus not allowed
+Disallowed xattr com.apple.FinderInfo found on .../Burrow.app
+```
+
+Stripping the attribute does not help — it comes straight back. Build outside the synced tree:
+
+```bash
+export CARGO_TARGET_DIR="$HOME/.burrow-build"
+export APPLE_SIGNING_IDENTITY="Developer ID Application: … (TEAMID)"
+npm run tauri build -- --bundles app
+```
+
+The signing identity is passed by environment, deliberately **not** written into
+`tauri.conf.json`: this is a public repo and a personal signing identity has no business in it.
+Anyone without the variable set simply gets an unsigned build.
+
+**Signing is what stops the keychain prompt.** macOS binds a keychain item's ACL to the *designated
+requirement* of the app that created it. An unsigned binary has no stable identity, so the ACL can
+never match and the prompt returns on every launch — "Always Allow" cannot stick to something with
+no fixed identity. A Developer ID signature gives:
+
+```
+identifier "io.github.trollord.burrow" and anchor apple generic
+  and certificate leaf[subject.OU] = "TEAMID"
+```
+
+which is stable across rebuilds, so one "Always Allow" holds forever.
+
+**Importing a certificate is two steps, not one.** A Developer ID cert on its own imports but
+reports `0 valid identities found`, because the **Developer ID Certification Authority (G2)**
+intermediate is missing and the chain to Apple's root cannot be built. Fetch it from
+`https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer` and import that too. Verify the
+certificate actually matches the private key before trusting any of it:
+
+```bash
+openssl x509 -in cert.pem -noout -modulus | openssl md5
+openssl rsa  -in private.key -noout -modulus | openssl md5   # must be identical
+```
+
+**Signed is not notarized.** `spctl` will still say `rejected — source=Unnotarized Developer ID`.
+Notarizing needs `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID`, or an App Store Connect API key.
+It only matters for distributing to other people; it has no bearing on the keychain prompt.
