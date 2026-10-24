@@ -196,8 +196,13 @@ async fn connect(region: String) -> Result<tunnel::Status, String> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
     }
-    Err("The tunnel came up but traffic is not going through it yet. \
-         Give the server another moment, then try again."
+    // Never tunnelled. Take it back DOWN before returning, or we leave every route pointing into
+    // a tunnel whose peer never answered — which is not a failed connect, it is no internet at
+    // all, with no way back except a reboot. Failing closed here would be the wrong kind of
+    // closed: the user loses the network rather than losing the VPN.
+    let _ = tunnel::down_region(&region, &path);
+    Err("Could not get traffic through the tunnel, so it has been disconnected again. \
+         The server may still be starting up — wait a moment and try again."
         .into())
 }
 

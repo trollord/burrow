@@ -245,3 +245,15 @@ openssl rsa  -in private.key -noout -modulus | openssl md5   # must be identical
 **Signed is not notarized.** `spctl` will still say `rejected — source=Unnotarized Developer ID`.
 Notarizing needs `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID`, or an App Store Connect API key.
 It only matters for distributing to other people; it has no bearing on the keychain prompt.
+
+**A failed connect must put the tunnel back down.** `wg-quick up` routes everything into the
+tunnel before any handshake happens. If the peer never answers — server still booting, destroyed,
+wrong address — the machine has no internet at all, and the app cannot even reach AWS to tell you
+why. This shipped once and cost a reboot to recover from. `connect` now tears the tunnel down
+before returning the error. Failing closed is the wrong kind of closed here: losing the VPN is
+fine, losing the network is not.
+
+**Release the static IP if provisioning fails after allocating it.** The address is allocated
+before the instance so a quota problem costs nothing, but that only holds if a later failure gives
+it back. A leaked one was found in testing — allocated, never attached, billing monthly, visible
+only by sweeping the account.

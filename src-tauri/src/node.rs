@@ -253,16 +253,35 @@ pub async fn provision(
     let zone = first_zone(&client, region)
         .await
         .unwrap_or_else(|| format!("{region}a"));
-    client
-        .create_instances()
-        .instance_names(&iname)
-        .availability_zone(&zone)
-        .blueprint_id(BLUEPRINT)
-        .bundle_id(&plan.bundle_id)
-        .user_data(launch_script(&server.private, &client_keys.public))
-        .send()
-        .await
-        .map_err(|e| format!("could not create the server: {e}"))?;
+    // From here on, a failure must release the address. It was allocated first so that a quota
+    // or permission problem costs nothing — but that only holds if we actually give it back.
+    // An unattached Lightsail static IP bills every month, silently, and this leaked one in
+    // testing: an allocated address with no instance, found only by sweeping the account.
+    macro_rules! or_release {
+        ($e:expr, $msg:expr) => {
+            match $e {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = client.detach_static_ip().static_ip_name(&ipname).send().await;
+                    let _ = client.release_static_ip().static_ip_name(&ipname).send().await;
+                    return Err(format!("{}: {e}", $msg));
+                }
+            }
+        };
+    }
+
+    or_release!(
+        client
+            .create_instances()
+            .instance_names(&iname)
+            .availability_zone(&zone)
+            .blueprint_id(BLUEPRINT)
+            .bundle_id(&plan.bundle_id)
+            .user_data(launch_script(&server.private, &client_keys.public))
+            .send()
+            .await,
+        "could not create the server"
+    );
 
     // Poll rather than assume: attach-static-ip fails on an instance that is still pending.
     let mut running = false;
