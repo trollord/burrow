@@ -114,17 +114,34 @@ export function mount(canvas, opts = {}) {
   };
 
   function drawLand(sinS, cosS) {
-    ctx.beginPath();
+    ctx.fillStyle = css("--globe-land", "#dfeaff");
+    ctx.strokeStyle = css("--globe-border", "#9dbff0");
+    ctx.lineWidth = 0.6;
+
     for (const { a, b, s, n } of LAND) {
+      // Skip rings entirely on the far side. They have no business being drawn, and projecting
+      // them onto the limb piles up overlapping slivers around the rim — which is precisely what
+      // used to invert the fill as the globe turned.
+      let visible = false;
+      for (let i = 0; i < n; i++) {
+        if (b[i] * cosS + a[i] * sinS > 0) { visible = true; break; }
+      }
+      if (!visible) continue;
+
+      // One path per ring, filled on its own. Batching every ring into a single path and filling
+      // once is faster, but then the fill rule has to decide inside-ness across all of them at
+      // once: even-odd flips land and sea wherever two rings overlap, and non-zero depends on
+      // winding order that Natural Earth does not guarantee once MultiPolygons are flattened.
+      // Per-ring fills simply paint over each other, which cannot go wrong. 234 fills a frame is
+      // nothing for canvas.
+      ctx.beginPath();
       for (let i = 0; i < n; i++) {
         let x = a[i] * cosS - b[i] * sinS;
         let y = -s[i];
-        const z = b[i] * cosS + a[i] * sinS;
-        if (z <= 0) {
-          // Behind the horizon: push the point out to the limb instead of dropping it. Dropping
-          // breaks the ring and leaves torn fills on anything spanning the edge — Russia and
-          // Antarctica especially. Projecting onto the rim keeps every ring closed, and the
-          // circular clip below hides the difference.
+        if (b[i] * cosS + a[i] * sinS <= 0) {
+          // Straddling the horizon: push the hidden points out to the limb rather than dropping
+          // them, so the ring stays closed instead of tearing open. The circular clip hides the
+          // seam. Russia and Antarctica are the ones that show it worst.
           const m = Math.hypot(x, y) || 1;
           x /= m; y /= m;
         }
@@ -132,12 +149,9 @@ export function mount(canvas, opts = {}) {
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
-    ctx.fillStyle = css("--globe-land", "#d9e8ff");
-    ctx.fill("evenodd");
-    ctx.strokeStyle = css("--globe-border", "#9cc0f0");
-    ctx.lineWidth = 0.6;
-    ctx.stroke();
   }
 
   function drawGraticule(sinS, cosS) {

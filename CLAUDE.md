@@ -180,3 +180,10 @@ privacy.
 - **Points behind the horizon are projected onto the limb, not dropped.** Dropping them breaks
   the ring and tears the fill on any country spanning the edge — Russia and Antarctica worst.
   Pushing them to the rim keeps every ring closed and the circular clip hides the join.
+- **One path per ring, and far-side rings culled entirely.** Batching all 234 rings into a single
+  path and filling once is faster, but then the fill rule decides inside-ness across all of them
+  together: `evenodd` flips land and sea wherever two rings overlap, and `nonzero` relies on a
+  winding order Natural Earth does not guarantee once MultiPolygons are flattened. This shipped
+  once — the globe looked correct facing Africa and inverted into a blue disc with white
+  continents once it turned toward the Pacific, because far-side rings collapse onto the limb and
+  pile into overlapping slivers. Per-ring fills just paint over each other and cannot invert.
